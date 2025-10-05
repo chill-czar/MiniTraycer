@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { runPipeline, type generatePlanRequest } from "@/lib/chains/pipeline";
+import { runPipeline } from "@/lib/chains/pipeline";
+import { generatePlanRequest } from "@/types/generatePlan";
 
 export async function POST(req: Request) {
   try {

@@ -122,7 +122,7 @@ export default function ChatInput() {
   };
 
   return (
-    <div className="p-3 border-t">
+    <div className="p-3">
       <div className="relative">
         <Textarea
           value={message}
