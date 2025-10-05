@@ -1,9 +1,5 @@
+import { ChatMessage } from "@/types/generatePlan";
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
 
 interface ChatState {
   messages: ChatMessage[];

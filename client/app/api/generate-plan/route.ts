@@ -1,62 +1,79 @@
 import { NextResponse } from "next/server";
+import { runPipeline, type generatePlanRequest } from "@/lib/chains/pipeline";
 
 export async function POST(req: Request) {
-  const { prompt , history } = await req.json();
+  try {
+    const body = await req.json();
+    const { prompt, history = [] } = body;
 
-  console.log("prompt:", prompt);
-  console.log("history:", history );
+    // Validate prompt
+    if (!prompt || typeof prompt !== "string") {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: "Prompt is required and must be a string." 
+        },
+        { status: 400 }
+      );
+    }
 
-  // Simulated demo response
-  const demoPlan = {
-    role: "assistant",
-    content: `
-# 🔍 Observations
-- You want a simplified Traycer-style planning system.
-- Input prompt should generate structured plan.
+    // Validate history array
+    if (!Array.isArray(history)) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          message: "History must be an array." 
+        },
+        { status: 400 }
+      );
+    }
 
-# 🧠 Approach
-We will design a pipeline:
-1. Take user prompt.
-2. Send to \`/api/generate-plan\`.
-3. Return structured plan.
-4. Display in React Markdown.
+    // Construct the request object according to generatePlanRequest type
+    const request: generatePlanRequest = {
+      prompt,
+      history, // Array of { role: "user" | "assistant", content: string }
+    };
 
-# ✅ Steps
-- [x] Setup Next.js API endpoint
-- [x] Connect with TanStack Query
-- [x] Store in Redux memory
-- [ ] Build chat panel UI
-- [ ] Extend with LLM later
+    // Run your Langchain + Langgraph pipeline
+    const result = await runPipeline(request);
+    
+    // Check if result indicates missing information (clarification needed)
+    if (!result.success && result.message) {
+      // Return the clarifying prompt to the frontend
+      return NextResponse.json({
+        success: false,
+        needsClarification: true,
+        message: result.message,
+        data: null,
+      }, { status: 200 }); // 200 because this is expected behavior
+    }
 
-# 📂 File Structure
-\`\`\`
-app/
- ├── api/
- │    └── generate-plan/
- │         └── route.ts
- ├── components/
- │    ├── ChatInput.tsx
- │    └── ChatPanel.tsx
- ├── lib/
- │    ├── api.ts
- │    └── redux/
- │         ├── planSlice.ts
- │         └── store.ts
-\`\`\`
+    // Check for other errors
+    if (!result.success) {
+      return NextResponse.json({
+        success: false,
+        message: result.message || "Failed to generate plan",
+        data: null,
+      }, { status: 500 });
+    }
 
-# 📊 Mermaid Diagram
-\`\`\`mermaid
-flowchart TD
-    A[User Prompt] --> B[API /generate-plan]
-    B --> C[Plan JSON]
-    C --> D[Redux Store]
-    D --> E[Chat Panel UI]
-\`\`\`
-    `,
-  };
+    // Success - return the generated plan
+    return NextResponse.json({
+      success: true,
+      data: result.data,
+      message: "Plan generated successfully",
+    });
 
-  return NextResponse.json({
-    success: true,
-    data: demoPlan,
-  });
+  } catch (err: any) {
+    console.error("Error in /api/generate-plan:", err);
+
+    return NextResponse.json(
+      {
+        success: false,
+        message: err?.message || "Failed to generate plan",
+        data: null,
+      },
+      { status: 500 }
+    );
+  }
 }

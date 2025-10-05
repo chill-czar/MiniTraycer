@@ -1,12 +1,37 @@
-import { ChatMessage } from "@/redux/chatsSlice";
+// types/generatePlan.ts
 
-export type generatePlanRequest = {
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface generatePlanRequest {
   prompt: string;
-  history: ChatMessage[]
-};
+  history: ChatMessage[];
+}
+
+export interface PlanMetadata {
+  generated_at: string;
+  retryCount: number;
+  maxRetries: number;
+  classification:
+    | "frontend"
+    | "backend"
+    | "fullstack"
+    | "library"
+    | "infra"
+    | "other"
+    | "unknown";
+}
+
+export interface PlanData {
+  markdown: string;
+  metadata: PlanMetadata;
+}
 
 export interface generatePlanResponse {
-  data: JSON | null; // JSON is too strict, use `any` or `unknown`
   success: boolean;
-  message?: string; // ✅ optional message for errors
+  data?: PlanData | null;
+  message?: string;
+  needsClarification?: boolean;
 }
