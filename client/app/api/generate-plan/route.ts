@@ -1,78 +1,33 @@
-import { NextResponse } from "next/server";
-import { runPipeline } from "@/lib/chains/pipeline";
-import { generatePlanRequest } from "@/types/generatePlan";
+// app/api/generate-plan/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { runPipeline } from "@/lib/pipeline";
+import { GeneratePlanRequest } from "@/types/generatePlan";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { prompt, history = [] } = body;
+    const body: GeneratePlanRequest = await req.json();
 
-    // Validate prompt
-    if (!prompt || typeof prompt !== "string") {
+    if (!body.prompt || typeof body.prompt !== "string") {
       return NextResponse.json(
-        { 
-          success: false, 
-          message: "Prompt is required and must be a string." 
-        },
+        { success: false, data: null, message: "Invalid prompt" },
         { status: 400 }
       );
     }
 
-    // Validate history array
-    if (!Array.isArray(history)) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          message: "History must be an array." 
-        },
-        { status: 400 }
-      );
-    }
+    const response = await runPipeline(body);
 
-    // Construct the request object according to generatePlanRequest type
-    const request: generatePlanRequest = {
-      prompt,
-      history, // Array of { role: "user" | "assistant", content: string }
-    };
-
-    // Run your Langchain + Langgraph pipeline
-    const result = await runPipeline(request);
-    
-    // Check if result indicates missing information (clarification needed)
-    if (!result.success && result.message) {
-      // Return the clarifying prompt to the frontend
-      return NextResponse.json({
-        success: false,
-        needsClarification: true,
-        message: result.message,
-        data: null,
-      }, { status: 200 }); // 200 because this is expected behavior
-    }
-
-    // Check for other errors
-    if (!result.success) {
-      return NextResponse.json({
-        success: false,
-        message: result.message || "Failed to generate plan",
-        data: null,
-      }, { status: 500 });
-    }
-
-    // Success - return the generated plan
-    return NextResponse.json({
-      success: true,
-      data: result.data,
-      message: "Plan generated successfully",
+    return NextResponse.json(response, {
+      status: response.success ? 200 : 400,
     });
-
-  } catch (err: any) {
-    console.error("Error in /api/generate-plan:", err);
+  } catch (error) {
+    console.error("API Error:", error);
 
     return NextResponse.json(
       {
         success: false,
-        message: err?.message || "Failed to generate plan",
         data: null,
+        message:
+          error instanceof Error ? error.message : "Internal server error",
       },
       { status: 500 }
     );

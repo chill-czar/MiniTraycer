@@ -11,7 +11,7 @@ export default function ChatHistory() {
   const messages = useSelector((state: RootState) => state.chats.messages);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;

@@ -1,23 +1,32 @@
 import api from "@/config/axios";
 import {
-  generatePlanRequest,
-  generatePlanResponse,
+  GeneratePlanRequest,
+  GeneratePlanResponse,
 } from "@/types/generatePlan";
+import { AxiosError } from "axios";
 
 export async function generatePlan(
-  data: generatePlanRequest
-): Promise<generatePlanResponse> {
+  data: GeneratePlanRequest
+): Promise<GeneratePlanResponse> {
   try {
-    const res = await api.post<generatePlanResponse>("/generate-plan", data);
-    // console.log(res)
+    const res = await api.post<GeneratePlanResponse>("/generate-plan", data);
+    
     return res.data;
-  } catch (err: any) {
-    // Return a consistent error format
+  } catch (err) {
+    
+    if (err instanceof AxiosError) {
+      return {
+        data: null,
+        success: false,
+        message:
+          err.response?.data?.message || err.message || "API request failed",
+      };
+    }
+
     return {
-      data: null, // ✅ add placeholder since `data` is required
+      data: null,
       success: false,
-      message:
-        err.response?.data?.message || err.message || "API request failed",
+      message: err instanceof Error ? err.message : "API request failed",
     };
   }
 }

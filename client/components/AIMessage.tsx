@@ -1,6 +1,6 @@
 "use client";
 
-import { Item } from "@/components/ui/item"; // shadcn Item
+import { Item } from "@/components/ui/item"; 
 import React from "react";
 import OptimizedMarkdown from "./Markdown";
 

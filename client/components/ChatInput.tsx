@@ -19,28 +19,26 @@ export default function ChatInput() {
   const handleSendMessage = () => {
     if (!message.trim()) return;
 
-    // Add user message to chat
     dispatch(addMessage({ role: "user", content: message }));
 
-    // Prepare history in the format expected by the pipeline
+  
     const history = messages.map((msg) => ({
       role: msg.role,
-      content: msg.content,
+      content: msg.summary || msg.content,
+      summary: msg.summary,
     }));
 
     generatePlan(
       { prompt: message, history },
       {
         onSuccess: (response) => {
-          console.log("API Response:", response);
-
-          // Handle clarification needed
           if (response.needsClarification) {
-            const clarificationMessage = {
-              role: "assistant" as const,
-              content: response.message || "Please provide more information.",
-            };
-            dispatch(addMessage(clarificationMessage));
+            dispatch(
+              addMessage({
+                role: "assistant",
+                content: response.message || "Please provide more information.",
+              })
+            );
 
             toast.info("Need more information", {
               description: "Please answer the questions to continue.",
@@ -48,15 +46,15 @@ export default function ChatInput() {
             return;
           }
 
-          // Handle error response
           if (!response.success) {
-            const errorMessage = {
-              role: "assistant" as const,
-              content: `❌ Error: ${
-                response.message || "Failed to generate plan"
-              }`,
-            };
-            dispatch(addMessage(errorMessage));
+            dispatch(
+              addMessage({
+                role: "assistant",
+                content: `❌ Error: ${
+                  response.message || "Failed to generate plan"
+                }`,
+              })
+            );
 
             toast.error("Plan generation failed", {
               description: response.message || "Unexpected error occurred.",
@@ -64,45 +62,32 @@ export default function ChatInput() {
             return;
           }
 
-          // Handle successful plan generation
-          if (response.success && response.data) {
-            const planData = response.data;
-
-            // Format the assistant response with markdown plan
-            const assistantMessage = {
-              role: "assistant" as const,
-              content: planData.markdown || "No plan content received.",
-            };
-
-            dispatch(addMessage(assistantMessage));
-
-            // Optional: Show metadata in console
-            if (planData.metadata) {
-              console.log("Plan Metadata:", {
-                classification: planData.metadata.classification,
-                retryCount: planData.metadata.retryCount,
-                generatedAt: planData.metadata.generated_at,
-              });
-            }
+          if (response.data) {
+          
+            dispatch(
+              addMessage({
+                role: "assistant",
+                content: response.data.markdown,
+                summary: response.data.summary,
+              })
+            );
 
             toast.success("Plan generated successfully!", {
               description: `Type: ${
-                planData.metadata?.classification || "unknown"
+                response.data.metadata?.classification || "unknown"
               }`,
             });
           }
         },
-        onError: (err: any) => {
-          console.error("API Error:", err);
-
-          // Add error message to chat
-          const errorMessage = {
-            role: "assistant" as const,
-            content: `❌ Request failed: ${
-              err?.message || "Please try again later."
-            }`,
-          };
-          dispatch(addMessage(errorMessage));
+        onError: (err: Error) => {
+          dispatch(
+            addMessage({
+              role: "assistant",
+              content: `❌ Request failed: ${
+                err?.message || "Please try again later."
+              }`,
+            })
+          );
 
           toast.error("Plan request failed", {
             description: err?.message || "Please try again later.",
