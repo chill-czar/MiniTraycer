@@ -4,84 +4,98 @@ import {
   generatePlanRequest,
   generatePlanResponse,
   PlanData,
+  PlanSection,
+  ProjectCategory,
+  ThinkingResult,
 } from "@/types/generatePlan";
 import { ChatGroq } from "@langchain/groq";
 import { StateGraph, END, Annotation } from "@langchain/langgraph";
 import { PROMPTS } from "./prompts";
 
-/**
- * Type definition for project classification
- */
-type ProjectType =
-  | "frontend"
-  | "backend"
-  | "fullstack"
-  | "library"
-  | "infra"
-  | "other";
 
 /**
- * Enhanced PipelineState with all required fields and defaults
+ * Enhanced pipeline state with dynamic planning
  */
 const PipelineStateAnnotation = Annotation.Root({
+  // Input
   prompt: Annotation<string>,
   history: Annotation<ChatMessage[]>({
     reducer: (_prev, newVal) => newVal,
     default: () => [],
   }),
-  needsInfo: Annotation<boolean>({
+
+  // Clarification state
+  needsClarification: Annotation<boolean>({
     reducer: (_prev, newVal) => newVal,
     default: () => false,
   }),
-  clarifyingPrompt: Annotation<string | null>({
-    reducer: (_prev, newVal) => newVal,
-    default: () => null,
-  }),
-  type: Annotation<ProjectType>({
-    reducer: (_prev, newVal) => newVal,
-    default: () => "other" as ProjectType,
-  }),
-  techStack: Annotation<string[]>({
+  clarificationQuestions: Annotation<string[]>({
     reducer: (_prev, newVal) => newVal,
     default: () => [],
   }),
-  optimizedPrompt: Annotation<string | null>({
+
+  // Analysis state
+  projectCategory: Annotation<ProjectCategory>({
+    reducer: (_prev, newVal) => newVal,
+    default: () => "unknown" as ProjectCategory,
+  }),
+  detectedTechStack: Annotation<string[]>({
+    reducer: (_prev, newVal) => newVal,
+    default: () => [],
+  }),
+  suggestedTechStack: Annotation<string[]>({
+    reducer: (_prev, newVal) => newVal,
+    default: () => [],
+  }),
+  projectComplexity: Annotation<"simple" | "moderate" | "complex">({
+    reducer: (_prev, newVal) => newVal,
+    default: () => "moderate",
+  }),
+
+  // Thinking state
+  currentThinking: Annotation<ThinkingResult | null>({
     reducer: (_prev, newVal) => newVal,
     default: () => null,
   }),
-  observations: Annotation<string | null>({
+  thinkingHistory: Annotation<ThinkingResult[]>({
+    reducer: (prev, newVal) => [...prev, ...newVal],
+    default: () => [],
+  }),
+
+  // Plan generation state
+  planSections: Annotation<PlanSection[]>({
+    reducer: (prev, newVal) => [...prev, ...newVal],
+    default: () => [],
+  }),
+  requiredSections: Annotation<string[]>({
+    reducer: (_prev, newVal) => newVal,
+    default: () => [],
+  }),
+  generatedSections: Annotation<Set<string>>({
+    reducer: (_prev, newVal) => newVal,
+    default: () => new Set<string>(),
+  }),
+
+  // Output
+  finalPlan: Annotation<string | null>({
     reducer: (_prev, newVal) => newVal,
     default: () => null,
   }),
-  approach: Annotation<string | null>({
-    reducer: (_prev, newVal) => newVal,
-    default: () => null,
-  }),
-  steps: Annotation<string | null>({
-    reducer: (_prev, newVal) => newVal,
-    default: () => null,
-  }),
-  fileStructure: Annotation<string | null>({
-    reducer: (_prev, newVal) => newVal,
-    default: () => null,
-  }),
-  markdownPlan: Annotation<string | null>({
-    reducer: (_prev, newVal) => newVal,
-    default: () => null,
-  }),
+
+  // Error handling
   retryCount: Annotation<number>({
     reducer: (_prev, newVal) => newVal,
     default: () => 0,
   }),
   maxRetries: Annotation<number>({
     reducer: (_prev, newVal) => newVal,
-    default: () => 2,
+    default: () => 3,
   }),
   lastError: Annotation<string | null>({
     reducer: (_prev, newVal) => newVal,
     default: () => null,
   }),
-  failedSection: Annotation<string | null>({
+  failedNode: Annotation<string | null>({
     reducer: (_prev, newVal) => newVal,
     default: () => null,
   }),
@@ -90,36 +104,25 @@ const PipelineStateAnnotation = Annotation.Root({
 export type PipelineState = typeof PipelineStateAnnotation.State;
 
 /**
- * LLM client configuration
+ * LLM Configuration
  */
 const llm = new ChatGroq({
   model: "llama-3.3-70b-versatile",
-  temperature: 0.15,
-  maxTokens: 2048,
+  temperature: 0.2,
+  maxTokens: 3000,
 });
 
 /**
- * Retry configuration with exponential backoff
+ * Utility: Extract text from LLM response
  */
-const RETRY_CONFIG = {
-  baseDelay: 1000,
-  maxDelay: 5000,
-  multiplier: 2,
-} as const;
-
-/**
- * Helper: Extract text content from LLM response
- */
-function messageToString(content: unknown): string {
-  if (content == null) return "";
+function extractText(content: unknown): string {
+  if (!content) return "";
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
       .map((c) => {
         if (typeof c === "string") return c;
-        if (c && typeof c === "object" && "text" in c) {
-          return String(c.text);
-        }
+        if (c && typeof c === "object" && "text" in c) return String(c.text);
         return "";
       })
       .join("");
@@ -131,751 +134,752 @@ function messageToString(content: unknown): string {
 }
 
 /**
- * Helper: Add exponential backoff delay
+ * Utility: Exponential backoff delay
  */
 async function retryDelay(retryCount: number): Promise<void> {
-  const delay = Math.min(
-    RETRY_CONFIG.baseDelay * Math.pow(RETRY_CONFIG.multiplier, retryCount),
-    RETRY_CONFIG.maxDelay
-  );
+  const delay = Math.min(1000 * Math.pow(2, retryCount), 5000);
+  console.log(`⏳ Waiting ${delay}ms before retry...`);
   await new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 /**
- * Enhanced heuristic extraction for tech stacks and project types
+ * Utility: Parse JSON from LLM response with fallback
  */
-interface HeuristicResult {
-  stacks: string[];
-  projectType: ProjectType;
-  confidence: number;
-}
-
-function extractInfoFromText(text: string): HeuristicResult {
-  const lower = text.toLowerCase();
-  const stacks: string[] = [];
-  let confidence = 0;
-
-  // Frontend frameworks
-  if (/\b(next(\.js)?|nextjs)\b/.test(lower)) {
-    stacks.push("Next.js");
-    confidence += 0.15;
-  }
-  if (/\breact\b/.test(lower)) {
-    stacks.push("React");
-    confidence += 0.1;
-  }
-  if (/\bvue(\.js)?\b/.test(lower)) {
-    stacks.push("Vue.js");
-    confidence += 0.1;
-  }
-  if (/\bangular\b/.test(lower)) {
-    stacks.push("Angular");
-    confidence += 0.1;
-  }
-  if (/\bsvelte\b/.test(lower)) {
-    stacks.push("Svelte");
-    confidence += 0.1;
-  }
-
-  // Backend frameworks
-  if (/\b(node(\.js)?|nodejs|express)\b/.test(lower)) {
-    stacks.push("Node.js");
-    confidence += 0.15;
-  }
-  if (/\b(python|django|flask|fastapi)\b/.test(lower)) {
-    stacks.push("Python");
-    confidence += 0.15;
-  }
-  if (/\b(rust|actix|rocket)\b/.test(lower)) {
-    stacks.push("Rust");
-    confidence += 0.1;
-  }
-  if (/\b(go|golang|gin)\b/.test(lower)) {
-    stacks.push("Go");
-    confidence += 0.1;
-  }
-  if (/\b(java|spring|springboot)\b/.test(lower)) {
-    stacks.push("Java");
-    confidence += 0.1;
-  }
-
-  // Databases
-  if (/\b(postgres(ql)?|pg)\b/.test(lower)) {
-    stacks.push("PostgreSQL");
-    confidence += 0.05;
-  }
-  if (/\b(mongo(db)?)\b/.test(lower)) {
-    stacks.push("MongoDB");
-    confidence += 0.05;
-  }
-  if (/\b(mysql|mariadb)\b/.test(lower)) {
-    stacks.push("MySQL");
-    confidence += 0.05;
-  }
-  if (/\b(redis)\b/.test(lower)) {
-    stacks.push("Redis");
-    confidence += 0.05;
-  }
-
-  // Mobile
-  if (/\b(react native)\b/.test(lower)) {
-    stacks.push("React Native");
-    confidence += 0.15;
-  }
-  if (/\b(flutter)\b/.test(lower)) {
-    stacks.push("Flutter");
-    confidence += 0.15;
-  }
-  if (/\b(swift|ios)\b/.test(lower)) {
-    stacks.push("iOS");
-    confidence += 0.1;
-  }
-  if (/\b(kotlin|android)\b/.test(lower)) {
-    stacks.push("Android");
-    confidence += 0.1;
-  }
-
-  // Infrastructure
-  if (/\b(kubernetes|k8s)\b/.test(lower)) {
-    stacks.push("Kubernetes");
-    confidence += 0.1;
-  }
-  if (/\b(docker)\b/.test(lower)) {
-    stacks.push("Docker");
-    confidence += 0.05;
-  }
-  if (/\b(aws|amazon web services)\b/.test(lower)) {
-    stacks.push("AWS");
-    confidence += 0.1;
-  }
-  if (/\b(gcp|google cloud)\b/.test(lower)) {
-    stacks.push("GCP");
-    confidence += 0.1;
-  }
-  if (/\b(azure)\b/.test(lower)) {
-    stacks.push("Azure");
-    confidence += 0.1;
-  }
-
-  // Testing & CI/CD
-  if (/\b(jest|vitest|mocha|cypress)\b/.test(lower)) {
-    stacks.push("Testing");
-    confidence += 0.05;
-  }
-  if (/\b(github actions|gitlab ci|jenkins|ci\/cd)\b/.test(lower)) {
-    stacks.push("CI/CD");
-    confidence += 0.05;
-  }
-
-  // Project type classification
-  let projectType: ProjectType = "other";
-  const frontendScore =
-    (/\b(frontend|ui|ux|client|web app)\b/.test(lower) ? 1 : 0) +
-    (stacks.some((s) =>
-      ["Next.js", "React", "Vue.js", "Angular", "Svelte"].includes(s)
-    )
-      ? 0.5
-      : 0);
-
-  const backendScore =
-    (/\b(api|backend|server|server-side|microservice)\b/.test(lower) ? 1 : 0) +
-    (stacks.some((s) => ["Node.js", "Python", "Rust", "Go", "Java"].includes(s))
-      ? 0.5
-      : 0);
-
-  const infraScore =
-    (/\b(infrastructure|infra|deploy|devops|cloud)\b/.test(lower) ? 1 : 0) +
-    (stacks.some((s) =>
-      ["Kubernetes", "Docker", "AWS", "GCP", "Azure"].includes(s)
-    )
-      ? 0.5
-      : 0);
-
-  const mobileScore = stacks.some((s) =>
-    ["React Native", "Flutter", "iOS", "Android"].includes(s)
-  )
-    ? 1
-    : 0;
-
-  if (frontendScore > 0.5 && backendScore > 0.5) {
-    projectType = "fullstack";
-  } else if (infraScore > 1) {
-    projectType = "infra";
-  } else if (mobileScore > 0) {
-    projectType = "fullstack"; // Mobile often needs backend
-  } else if (frontendScore > backendScore) {
-    projectType = "frontend";
-  } else if (backendScore > frontendScore) {
-    projectType = "backend";
-  } else if (/\b(library|sdk|package|npm|pip)\b/.test(lower)) {
-    projectType = "library";
-  }
-
-  return {
-    stacks: Array.from(new Set(stacks)),
-    projectType,
-    confidence,
-  };
-}
-
-/**
- * NODE 1: Check for missing information - RELAXED VERSION
- */
-const checkMissingInfoNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  const combined = [
-    state.prompt,
-    ...(state.history || []).map((h: ChatMessage) => h.content),
-  ].join("\n");
-
-  const heur = extractInfoFromText(combined);
-
-  // Only ask for clarification if the prompt is EXTREMELY vague
-  const isExtremelyVague = 
-    combined.trim().split(/\s+/).length < 5 && // Very short prompt
-    heur.stacks.length === 0 && 
-    heur.projectType === "other" &&
-    !/\b(app|website|api|service|tool|system|platform|dashboard|build|create|make)\b/i.test(combined);
-
-  if (isExtremelyVague) {
-    return {
-      needsInfo: true,
-      clarifyingPrompt: `I'd be happy to help you create a development plan! Could you tell me a bit more about what you want to build?\n\nFor example:\n- What type of application or system? (web app, API, mobile app, etc.)\n- What should it do or what problem does it solve?\n- Any specific technologies you prefer?`,
-      techStack: [],
-      type: "other",
-    };
-  }
-
-  // Otherwise, proceed with whatever info we have
-  return { 
-    needsInfo: false, 
-    techStack: heur.stacks, 
-    type: heur.projectType 
-  };
-};
-
-/**
- * NODE 2: Classify project type - ENHANCED VERSION
- */
-const classifyNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  const combined = [
-    state.prompt,
-    ...(state.history || []).map((h: ChatMessage) => h.content),
-  ].join("\n");
-
-  const heur = extractInfoFromText(combined);
-
-  // Use heuristic if we have any confidence
-  if (heur.projectType !== "other") {
-    return {
-      type: heur.projectType,
-      techStack: heur.stacks.length > 0 ? heur.stacks : ["To be determined based on requirements"],
-    };
-  }
-
-  // LLM classification with instruction to make assumptions
+function parseJSON<T>(text: string, fallback: T): T {
   try {
-    const res = await llm.invoke([
-      {
-        role: "system",
-        content: `You are a project classifier. Based on the user's description, classify the project type and suggest appropriate tech stacks.
+    const cleaned = text
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
+    return JSON.parse(cleaned);
+  } catch {
+    return fallback;
+  }
+}
 
-If not explicitly stated, make intelligent assumptions based on:
-- Industry best practices
-- Common patterns for similar projects
-- Scalability and maintainability
+/**
+ * NODE 1: Initial Analysis - Understand the prompt deeply
+ */
+const initialAnalysisNode = async (
+  state: PipelineState
+): Promise<Partial<PipelineState>> => {
+  console.log("\n🧠 === INITIAL ANALYSIS NODE ===");
+  console.log(
+    "📝 Analyzing user prompt to understand intent and requirements..."
+  );
 
-Always provide a classification even if details are vague. Respond with JSON:
-{
-  "type": "frontend|backend|fullstack|library|infra",
-  "suggestedStacks": ["tech1", "tech2"],
-  "reasoning": "brief explanation"
-}`,
-      },
-      {
-        role: "user",
-        content: `Project description:\n${combined}\n\nDetected hints: ${heur.stacks.join(", ") || "none"}`,
-      },
-    ]);
+  const combined = [state.prompt, ...state.history.map((h) => h.content)].join(
+    "\n"
+  );
 
-    const txt = messageToString(res.content).trim();
-    
-    // Try to parse JSON response
-    let parsed;
-    try {
-      const cleaned = txt.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
-      parsed = JSON.parse(cleaned);
-    } catch {
-      // Fallback to text parsing
-      let type: ProjectType = "fullstack";
-      if (txt.includes("frontend")) type = "frontend";
-      else if (txt.includes("backend")) type = "backend";
-      else if (txt.includes("library")) type = "library";
-      else if (txt.includes("infra")) type = "infra";
-      
+  console.log(`📊 Input length: ${combined.length} characters`);
+  console.log(`📊 History messages: ${state.history.length}`);
+
+  // Build conversation context for LLM
+  const messages: Array<{ role: string; content: string }> = [
+    {
+      role: "system",
+      content: PROMPTS.INITIAL_ANALYSIS_SYSTEM,
+    },
+  ];
+
+  // Add history as conversation
+  if (state.history.length > 0) {
+    console.log("📜 Including conversation history for context");
+    state.history.forEach((msg) => {
+      messages.push({
+        role: msg.role === "user" ? "user" : "assistant",
+        content: msg.content,
+      });
+    });
+  }
+
+  // Add current prompt
+  messages.push({
+    role: "user",
+    content: state.prompt,
+  });
+
+  try {
+    const response = await llm.invoke(messages);
+
+    const analysisText = extractText(response.content);
+    console.log(
+      `🔍 Raw analysis response: ${analysisText.substring(0, 200)}...`
+    );
+
+    const analysis = parseJSON<{
+      isVague: boolean;
+      hasSufficientDetail: boolean;
+      detectedIntent: string;
+      missingInfo: string[];
+      confidence: number;
+    }>(analysisText, {
+      // Better fallback logic
+      isVague:
+        combined.trim().split(/\s+/).length < 10 && state.history.length === 0,
+      hasSufficientDetail:
+        combined.trim().split(/\s+/).length >= 15 || state.history.length > 0,
+      detectedIntent: "project description",
+      missingInfo: [],
+      confidence: state.history.length > 0 ? 0.7 : 0.3,
+    });
+
+    console.log("🔍 Analysis Results:");
+    console.log(`   - Vague: ${analysis.isVague}`);
+    console.log(`   - Sufficient Detail: ${analysis.hasSufficientDetail}`);
+    console.log(`   - Detected Intent: ${analysis.detectedIntent}`);
+    console.log(`   - Confidence: ${analysis.confidence}`);
+    console.log(`   - Missing Info: ${analysis.missingInfo.join(", ")}`);
+
+    // More lenient clarification logic
+    // Only ask for clarification if:
+    // 1. First message AND very short/vague
+    // 2. Confidence is very low (< 0.4)
+    // 3. Has explicit missing critical info
+    const shouldClarify =
+      analysis.isVague &&
+      !analysis.hasSufficientDetail &&
+      analysis.confidence < 0.4 &&
+      analysis.missingInfo.length > 0;
+
+    if (shouldClarify) {
+      console.log("⚠️  Prompt needs clarification");
+      console.log(`   Missing info: ${analysis.missingInfo.join(", ")}`);
+
       return {
-        type,
-        techStack: heur.stacks.length > 0 ? heur.stacks : ["Modern web technologies"],
+        needsClarification: true,
+        clarificationQuestions: analysis.missingInfo,
+        currentThinking: {
+          reasoning: `Prompt is too vague (confidence: ${analysis.confidence}). Need more information.`,
+          decisions: ["Request clarification before proceeding"],
+          assumptions: [],
+          nextAction: "ask_clarification",
+        },
       };
     }
 
+    console.log(
+      "✅ Prompt has sufficient detail, proceeding to classification"
+    );
+
     return {
-      type: parsed.type || "fullstack",
-      techStack: parsed.suggestedStacks || heur.stacks || ["Modern web technologies"],
+      needsClarification: false,
+      currentThinking: {
+        reasoning: `Prompt has sufficient detail (confidence: ${
+          analysis.confidence
+        }). ${
+          state.history.length > 0 ? "Built on previous conversation." : ""
+        }`,
+        decisions: ["Proceed with classification"],
+        assumptions:
+          analysis.confidence < 0.6
+            ? ["Making reasonable assumptions where details are unclear"]
+            : [],
+        nextAction: "classify_project",
+      },
     };
   } catch (error) {
-    console.error("Classification error:", error);
+    console.error("❌ Initial analysis failed:", error);
     return {
-      type: "fullstack",
-      techStack: heur.stacks.length > 0 ? heur.stacks : ["React", "Node.js"],
+      lastError: `Analysis failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      failedNode: "initialAnalysis",
     };
   }
 };
 
 /**
- * NODE 3: Optimize prompt with context injection
+ * NODE 2: Project Classification - Categorize and extract tech stack
  */
-const optimizePromptNode = async (
+const classificationNode = async (
   state: PipelineState
 ): Promise<Partial<PipelineState>> => {
-  if (state.optimizedPrompt) {
+  console.log("\n🏷️  === CLASSIFICATION NODE ===");
+  console.log("🔎 Classifying project type and extracting tech stack...");
+
+  const combined = [state.prompt, ...state.history.map((h) => h.content)].join(
+    "\n"
+  );
+
+  console.log(`📊 Full context length: ${combined.length} characters`);
+
+  // Build conversation messages
+  const messages: Array<{ role: string; content: string }> = [
+    {
+      role: "system",
+      content: PROMPTS.CLASSIFICATION_SYSTEM,
+    },
+  ];
+
+  // Add history
+  if (state.history.length > 0) {
+    state.history.forEach((msg) => {
+      messages.push({
+        role: msg.role === "user" ? "user" : "assistant",
+        content: msg.content,
+      });
+    });
+  }
+
+  // Add current prompt
+  messages.push({
+    role: "user",
+    content: state.prompt,
+  });
+
+  try {
+    const response = await llm.invoke(messages);
+
+    const classificationText = extractText(response.content);
+    console.log(
+      `🔍 Raw classification: ${classificationText.substring(0, 200)}...`
+    );
+
+    const classification = parseJSON<{
+      category: ProjectCategory;
+      detectedStack: string[];
+      suggestedStack: string[];
+      complexity: "simple" | "moderate" | "complex";
+      reasoning: string;
+    }>(classificationText, {
+      category: "web_app",
+      detectedStack: [],
+      suggestedStack: ["React", "Node.js", "PostgreSQL"],
+      complexity: "moderate",
+      reasoning: "Default classification",
+    });
+
+    console.log("📦 Classification Results:");
+    console.log(`   - Category: ${classification.category}`);
+    console.log(
+      `   - Detected Stack: ${
+        classification.detectedStack.join(", ") || "none"
+      }`
+    );
+    console.log(
+      `   - Suggested Stack: ${classification.suggestedStack.join(", ")}`
+    );
+    console.log(`   - Complexity: ${classification.complexity}`);
+    console.log(`   - Reasoning: ${classification.reasoning}`);
+
+    const thinking: ThinkingResult = {
+      reasoning: classification.reasoning,
+      decisions: [
+        `Classified as: ${classification.category}`,
+        `Complexity level: ${classification.complexity}`,
+        `Tech stack: ${[
+          ...classification.detectedStack,
+          ...classification.suggestedStack,
+        ].join(", ")}`,
+      ],
+      assumptions:
+        classification.detectedStack.length === 0
+          ? [
+              `No explicit tech mentioned, suggesting: ${classification.suggestedStack.join(
+                ", "
+              )}`,
+            ]
+          : [],
+      nextAction: "determine_sections",
+    };
+
+    return {
+      projectCategory: classification.category,
+      detectedTechStack: classification.detectedStack,
+      suggestedTechStack: classification.suggestedStack,
+      projectComplexity: classification.complexity,
+      currentThinking: thinking,
+      thinkingHistory: [thinking],
+    };
+  } catch (error) {
+    console.error("❌ Classification failed:", error);
+    return {
+      lastError: `Classification failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      failedNode: "classification",
+    };
+  }
+};
+
+/**
+ * NODE 3: Section Planning - Determine what sections the plan needs
+ */
+const sectionPlanningNode = async (
+  state: PipelineState
+): Promise<Partial<PipelineState>> => {
+  console.log("\n📋 === SECTION PLANNING NODE ===");
+  console.log("🎯 Determining required plan sections based on project type...");
+
+  try {
+    const response = await llm.invoke([
+      {
+        role: "system",
+        content: PROMPTS.SECTION_PLANNING_SYSTEM,
+      },
+      {
+        role: "user",
+        content: `Project Category: ${state.projectCategory}
+Tech Stack: ${[...state.detectedTechStack, ...state.suggestedTechStack].join(
+          ", "
+        )}
+Complexity: ${state.projectComplexity}
+
+Original Prompt: ${state.prompt}`,
+      },
+    ]);
+
+    const planText = extractText(response.content);
+    const plan = parseJSON<{
+      sections: string[];
+      reasoning: string;
+      priorityOrder: number[];
+    }>(planText, {
+      sections: [
+        "Overview",
+        "Architecture",
+        "Implementation Steps",
+        "Tech Stack",
+      ],
+      reasoning: "Default sections",
+      priorityOrder: [1, 2, 3, 4],
+    });
+
+    console.log("📑 Required Sections:");
+    plan.sections.forEach((section, idx) => {
+      console.log(`   ${idx + 1}. ${section}`);
+    });
+    console.log(`   Reasoning: ${plan.reasoning}`);
+
+    const thinking: ThinkingResult = {
+      reasoning: plan.reasoning,
+      decisions: [`Will generate ${plan.sections.length} sections`],
+      assumptions: ["Sections determined by project category and complexity"],
+      nextAction: "generate_sections",
+    };
+
+    return {
+      requiredSections: plan.sections,
+      currentThinking: thinking,
+      thinkingHistory: [thinking],
+    };
+  } catch (error) {
+    console.error("❌ Section planning failed:", error);
+    return {
+      lastError: `Section planning failed: ${
+        error instanceof Error ? error.message : "Unknown error"
+      }`,
+      failedNode: "sectionPlanning",
+    };
+  }
+};
+
+/**
+ * NODE 4: Section Generator - Generate each section dynamically
+ */
+const sectionGeneratorNode = async (
+  state: PipelineState
+): Promise<Partial<PipelineState>> => {
+  console.log("\n✍️  === SECTION GENERATOR NODE ===");
+
+  const sectionsToGenerate = state.requiredSections.filter(
+    (section) => !state.generatedSections.has(section)
+  );
+
+  if (sectionsToGenerate.length === 0) {
+    console.log("✅ All sections generated");
     return {};
   }
 
-  const combined = [
-    state.prompt,
-    ...(state.history || []).map((h: ChatMessage) => h.content),
-  ].join("\n");
-
-  const contextHints = [
-    `Project Type: ${state.type}`,
-    `Tech Stack: ${(state.techStack || []).join(", ") || "not specified"}`,
-    (state.retryCount || 0) > 0
-      ? `Previous attempt failed at: ${state.failedSection || "unknown"}`
-      : null,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const currentSection = sectionsToGenerate[0];
+  console.log(`📝 Generating section: "${currentSection}"`);
+  console.log(
+    `   Progress: ${state.generatedSections.size}/${state.requiredSections.length}`
+  );
 
   try {
-    const res = await llm.invoke([
+    // Build context from previously generated sections
+    const previousSections = state.planSections
+      .map((s) => `## ${s.title}\n${s.content}`)
+      .join("\n\n");
+
+    const response = await llm.invoke([
       {
         role: "system",
-        content: PROMPTS.OPTIMIZATION_SYSTEM,
+        content: PROMPTS.SECTION_GENERATOR_SYSTEM,
       },
       {
         role: "user",
-        content: `${contextHints}\n\nOriginal Prompt:\n${combined}`,
+        content: `Section to Generate: ${currentSection}
+
+Project Category: ${state.projectCategory}
+Tech Stack: ${[...state.detectedTechStack, ...state.suggestedTechStack].join(
+          ", "
+        )}
+Complexity: ${state.projectComplexity}
+
+Original Prompt: ${state.prompt}
+
+Previously Generated Sections:
+${previousSections || "None yet"}
+
+Generate this section with relevant, detailed content that fits the project type.`,
       },
     ]);
 
-    const optimized = messageToString(res.content).trim();
+    const sectionContent = extractText(response.content).trim();
+
+    console.log(
+      `✅ Generated "${currentSection}" (${sectionContent.length} chars)`
+    );
+
+    const newSection: PlanSection = {
+      title: currentSection,
+      content: sectionContent,
+      order: state.planSections.length + 1,
+    };
+
+    const updatedGenerated = new Set(state.generatedSections);
+    updatedGenerated.add(currentSection);
+
+    const thinking: ThinkingResult = {
+      reasoning: `Generated "${currentSection}" section based on project requirements`,
+      decisions: [
+        `Section contains ${sectionContent.split("\n").length} lines`,
+      ],
+      assumptions: [],
+      nextAction:
+        updatedGenerated.size < state.requiredSections.length
+          ? "generate_next_section"
+          : "aggregate_plan",
+    };
 
     return {
-      optimizedPrompt: optimized || state.prompt,
+      planSections: [newSection],
+      generatedSections: updatedGenerated,
+      currentThinking: thinking,
+      thinkingHistory: [thinking],
     };
   } catch (error) {
-    console.error("Optimization error:", error);
+    console.error(`❌ Failed to generate section "${currentSection}":`, error);
     return {
-      optimizedPrompt: state.prompt,
-    };
-  }
-};
-
-/**
- * NODE 4: Generate Observations section - RELAXED VALIDATION
- */
-const observationsNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  const promptToUse = state.optimizedPrompt || state.prompt;
-
-  try {
-    const res = await llm.invoke([
-      {
-        role: "system",
-        content: PROMPTS.OBSERVATIONS_SYSTEM,
-      },
-      {
-        role: "user",
-        content: `Type: ${state.type}\nStack: ${(state.techStack || []).join(", ")}\n\nBrief:\n${promptToUse}`,
-      },
-    ]);
-
-    const observations = messageToString(res.content).trim();
-
-    if (!observations || observations.length < 20) {
-      return {
-        lastError: "Observations section too short",
-        failedSection: "observations",
-      };
-    }
-
-    return {
-      observations,
-      lastError: null,
-      failedSection: null,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return {
-      lastError: `Observations generation failed: ${errorMessage}`,
-      failedSection: "observations",
-    };
-  }
-};
-
-/**
- * NODE 5: Generate Approach section - RELAXED VALIDATION
- */
-const approachNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  const promptToUse = state.optimizedPrompt || state.prompt;
-
-  try {
-    const res = await llm.invoke([
-      {
-        role: "system",
-        content: PROMPTS.APPROACH_SYSTEM,
-      },
-      {
-        role: "user",
-        content: `Type: ${state.type}\nStack: ${(state.techStack || []).join(", ")}\nObservations:\n${state.observations}\n\nBrief:\n${promptToUse}`,
-      },
-    ]);
-
-    const approach = messageToString(res.content).trim();
-
-    if (!approach || approach.length < 20) {
-      return {
-        lastError: "Approach section too short",
-        failedSection: "approach",
-      };
-    }
-
-    return {
-      approach,
-      lastError: null,
-      failedSection: null,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return {
-      lastError: `Approach generation failed: ${errorMessage}`,
-      failedSection: "approach",
-    };
-  }
-};
-
-/**
- * NODE 6: Generate Steps section - RELAXED VALIDATION
- */
-const stepsNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  const promptToUse = state.optimizedPrompt || state.prompt;
-
-  try {
-    const res = await llm.invoke([
-      {
-        role: "system",
-        content: PROMPTS.STEPS_SYSTEM,
-      },
-      {
-        role: "user",
-        content: `Type: ${state.type}\nStack: ${(state.techStack || []).join(", ")}\nApproach:\n${state.approach}\n\nBrief:\n${promptToUse}`,
-      },
-    ]);
-
-    const steps = messageToString(res.content).trim();
-
-    if (!steps || steps.length < 30) {
-      return {
-        lastError: "Steps section too short",
-        failedSection: "steps",
-      };
-    }
-
-    return {
-      steps,
-      lastError: null,
-      failedSection: null,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return {
-      lastError: `Steps generation failed: ${errorMessage}`,
-      failedSection: "steps",
-    };
-  }
-};
-
-/**
- * NODE 7: Generate File Structure section - RELAXED VALIDATION
- */
-const fileStructureNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  try {
-    const res = await llm.invoke([
-      {
-        role: "system",
-        content: PROMPTS.FILE_STRUCTURE_SYSTEM,
-      },
-      {
-        role: "user",
-        content: `Type: ${state.type}\nStack: ${(state.techStack || []).join(", ")}\nSteps:\n${state.steps}`,
-      },
-    ]);
-
-    const fileStructure = messageToString(res.content).trim();
-
-    if (!fileStructure || fileStructure.length < 20) {
-      return {
-        lastError: "File structure section too short",
-        failedSection: "fileStructure",
-      };
-    }
-
-    return {
-      fileStructure,
-      lastError: null,
-      failedSection: null,
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return {
-      lastError: `File structure generation failed: ${errorMessage}`,
-      failedSection: "fileStructure",
-    };
-  }
-};
-
-/**
- * NODE 8: Retry guard with exponential backoff
- */
-const retryGuardNode = async (
-  state: PipelineState
-): Promise<Partial<PipelineState>> => {
-  const currentRetryCount = state.retryCount || 0;
-  const maxRetries = state.maxRetries || 2;
-  const newCount = currentRetryCount + 1;
-
-  if (newCount > maxRetries) {
-    return {
-      retryCount: newCount,
-      lastError: `Exceeded maximum retries (${maxRetries}). Last failure: ${
-        state.failedSection || "unknown"
+      lastError: `Section generation failed: ${
+        error instanceof Error ? error.message : "Unknown error"
       }`,
+      failedNode: "sectionGenerator",
     };
   }
-
-  await retryDelay(currentRetryCount);
-
-  return {
-    retryCount: newCount,
-    lastError: null,
-  };
 };
 
 /**
- * NODE 9: Assemble final markdown plan
+ * NODE 5: Plan Aggregator - Combine all sections into final plan
  */
-const assemblerNode = async (
+const planAggregatorNode = async (
   state: PipelineState
 ): Promise<Partial<PipelineState>> => {
-  if (
-    !state.observations ||
-    !state.approach ||
-    !state.steps ||
-    !state.fileStructure
-  ) {
+  console.log("\n🔗 === PLAN AGGREGATOR NODE ===");
+  console.log("📦 Combining all sections into final plan...");
+
+  if (state.planSections.length === 0) {
+    console.error("❌ No sections to aggregate");
     return {
-      lastError:
-        state.lastError || "Cannot assemble plan: missing required sections",
+      lastError: "No sections generated to aggregate",
+      failedNode: "planAggregator",
     };
   }
 
-  const markdown = `# 🔍 Observations
+  // Sort sections by order
+  const sortedSections = [...state.planSections].sort(
+    (a, b) => a.order - b.order
+  );
 
-${state.observations}
+  // Build the final markdown plan
+  const planParts: string[] = [
+    `# 🚀 Development Plan`,
+    ``,
+    `**Project Type:** ${state.projectCategory}`,
+    `**Tech Stack:** ${[
+      ...state.detectedTechStack,
+      ...state.suggestedTechStack,
+    ].join(", ")}`,
+    `**Complexity:** ${state.projectComplexity}`,
+    ``,
+    `---`,
+    ``,
+  ];
 
-# 🧠 Approach
+  sortedSections.forEach((section) => {
+    planParts.push(`# ${section.title}`);
+    planParts.push(``);
+    planParts.push(section.content);
+    planParts.push(``);
+  });
 
-${state.approach}
+  const finalPlan = planParts.join("\n");
 
-# ✅ Steps
+  console.log("✅ Final plan aggregated successfully");
+  console.log(`   Total length: ${finalPlan.length} characters`);
+  console.log(`   Sections included: ${sortedSections.length}`);
 
-${state.steps}
-
-# 📂 File Structure
-
-${state.fileStructure}`;
+  const thinking: ThinkingResult = {
+    reasoning: "All sections combined into comprehensive development plan",
+    decisions: [`Plan contains ${sortedSections.length} sections`],
+    assumptions: [],
+    nextAction: "complete",
+  };
 
   return {
-    markdownPlan: markdown,
+    finalPlan,
+    currentThinking: thinking,
+    thinkingHistory: [thinking],
+  };
+};
+
+/**
+ * NODE 6: Retry Handler - Handle failures with exponential backoff
+ */
+const retryHandlerNode = async (
+  state: PipelineState
+): Promise<Partial<PipelineState>> => {
+  console.log("\n🔄 === RETRY HANDLER NODE ===");
+
+  const newRetryCount = state.retryCount + 1;
+
+  console.log(`⚠️  Retry attempt ${newRetryCount}/${state.maxRetries}`);
+  console.log(`   Failed node: ${state.failedNode}`);
+  console.log(`   Error: ${state.lastError}`);
+
+  if (newRetryCount > state.maxRetries) {
+    console.error(`❌ Max retries (${state.maxRetries}) exceeded`);
+    return {
+      retryCount: newRetryCount,
+      lastError: `Maximum retries exceeded. Last error: ${state.lastError}`,
+    };
+  }
+
+  await retryDelay(state.retryCount);
+
+  console.log("♻️  Resetting error state and retrying...");
+
+  return {
+    retryCount: newRetryCount,
     lastError: null,
   };
 };
 
 /**
- * FIXED Conditional edge functions - ALL use "Node" suffix
+ * ROUTING FUNCTIONS
  */
-const shouldEndAfterCheck = (state: PipelineState): string => {
-  return state.needsInfo ? END : "classifyNode";
-};
 
-const shouldOptimize = (state: PipelineState): string => {
-  const planningTypes: ProjectType[] = [
-    "frontend",
-    "backend",
-    "fullstack",
-    "library",
-    "infra",
-  ];
-  return planningTypes.includes(state.type) ? "optimizeNode" : "observationsNode";
-};
-
-const afterObservationsRoute = (state: PipelineState): string => {
-  if (state.observations && !state.lastError) {
-    return "approachNode";
+const afterInitialAnalysis = (state: PipelineState): string => {
+  if (state.needsClarification) {
+    console.log("🔀 Routing: -> END (needs clarification)");
+    return END;
   }
-  return "retryGuardNode";
+  console.log("🔀 Routing: -> classificationNode");
+  return "classificationNode";
 };
 
-const afterApproachRoute = (state: PipelineState): string => {
-  if (state.approach && !state.lastError) {
-    return "stepsNode";
+const afterClassification = (state: PipelineState): string => {
+  if (state.lastError) {
+    console.log("🔀 Routing: -> retryHandlerNode (error occurred)");
+    return "retryHandlerNode";
   }
-  return "retryGuardNode";
+  console.log("🔀 Routing: -> sectionPlanningNode");
+  return "sectionPlanningNode";
 };
 
-const afterStepsRoute = (state: PipelineState): string => {
-  if (state.steps && !state.lastError) {
-    return "fileStructureNode";
+const afterSectionPlanning = (state: PipelineState): string => {
+  if (state.lastError) {
+    console.log("🔀 Routing: -> retryHandlerNode (error occurred)");
+    return "retryHandlerNode";
   }
-  return "retryGuardNode";
+  console.log("🔀 Routing: -> sectionGeneratorNode");
+  return "sectionGeneratorNode";
 };
 
-const afterFileStructureRoute = (state: PipelineState): string => {
-  if (state.fileStructure && !state.lastError) {
-    return "assemblerNode";
-  }
-  return "retryGuardNode";
-};
-
-const afterRetryRoute = (state: PipelineState): string => {
-  const currentRetryCount = state.retryCount || 0;
-  const maxRetries = state.maxRetries || 2;
-
-  if (currentRetryCount > maxRetries) {
-    return "assemblerNode";
+const afterSectionGenerator = (state: PipelineState): string => {
+  if (state.lastError) {
+    console.log("🔀 Routing: -> retryHandlerNode (error occurred)");
+    return "retryHandlerNode";
   }
 
-  // Route to the failed section
-  switch (state.failedSection) {
-    case "observations":
-      return "observationsNode";
-    case "approach":
-      return "approachNode";
-    case "steps":
-      return "stepsNode";
-    case "fileStructure":
-      return "fileStructureNode";
+  const allGenerated =
+    state.generatedSections.size >= state.requiredSections.length;
+
+  if (allGenerated) {
+    console.log("🔀 Routing: -> planAggregatorNode (all sections complete)");
+    return "planAggregatorNode";
+  }
+
+  console.log("🔀 Routing: -> sectionGeneratorNode (more sections needed)");
+  return "sectionGeneratorNode";
+};
+
+const afterRetry = (state: PipelineState): string => {
+  if (state.retryCount > state.maxRetries) {
+    console.log("🔀 Routing: -> planAggregatorNode (max retries exceeded)");
+    return "planAggregatorNode";
+  }
+
+  // Route back to failed node
+  switch (state.failedNode) {
+    case "classification":
+      console.log("🔀 Routing: -> classificationNode (retry)");
+      return "classificationNode";
+    case "sectionPlanning":
+      console.log("🔀 Routing: -> sectionPlanningNode (retry)");
+      return "sectionPlanningNode";
+    case "sectionGenerator":
+      console.log("🔀 Routing: -> sectionGeneratorNode (retry)");
+      return "sectionGeneratorNode";
     default:
-      return "optimizeNode";
+      console.log("🔀 Routing: -> classificationNode (default retry)");
+      return "classificationNode";
   }
 };
 
 /**
- * Build and compile the StateGraph workflow
+ * BUILD THE WORKFLOW GRAPH
  */
 const workflow = new StateGraph(PipelineStateAnnotation)
-  .addNode("checkMissingInfoNode", checkMissingInfoNode)
-  .addNode("classifyNode", classifyNode)
-  .addNode("optimizeNode", optimizePromptNode)
-  .addNode("observationsNode", observationsNode)
-  .addNode("approachNode", approachNode)
-  .addNode("stepsNode", stepsNode)
-  .addNode("fileStructureNode", fileStructureNode)
-  .addNode("retryGuardNode", retryGuardNode)
-  .addNode("assemblerNode", assemblerNode)
-  .addEdge("__start__", "checkMissingInfoNode")
-  .addConditionalEdges("checkMissingInfoNode", shouldEndAfterCheck)
-  .addConditionalEdges("classifyNode", shouldOptimize)
-  .addEdge("optimizeNode", "observationsNode")
-  .addConditionalEdges("observationsNode", afterObservationsRoute)
-  .addConditionalEdges("approachNode", afterApproachRoute)
-  .addConditionalEdges("stepsNode", afterStepsRoute)
-  .addConditionalEdges("fileStructureNode", afterFileStructureRoute)
-  .addConditionalEdges("retryGuardNode", afterRetryRoute)
-  .addEdge("assemblerNode", END);
+  .addNode("initialAnalysisNode", initialAnalysisNode)
+  .addNode("classificationNode", classificationNode)
+  .addNode("sectionPlanningNode", sectionPlanningNode)
+  .addNode("sectionGeneratorNode", sectionGeneratorNode)
+  .addNode("planAggregatorNode", planAggregatorNode)
+  .addNode("retryHandlerNode", retryHandlerNode)
+  .addEdge("__start__", "initialAnalysisNode")
+  .addConditionalEdges("initialAnalysisNode", afterInitialAnalysis)
+  .addConditionalEdges("classificationNode", afterClassification)
+  .addConditionalEdges("sectionPlanningNode", afterSectionPlanning)
+  .addConditionalEdges("sectionGeneratorNode", afterSectionGenerator)
+  .addConditionalEdges("retryHandlerNode", afterRetry)
+  .addEdge("planAggregatorNode", END);
 
 const app = workflow.compile();
 
 /**
- * Public function to run the complete pipeline
+ * PUBLIC API: Run the complete adaptive pipeline
  */
 export async function runPipeline(
   req: generatePlanRequest
 ): Promise<generatePlanResponse> {
+  console.log("\n🚀 ========================================");
+  console.log("🚀 STARTING ADAPTIVE PLANNING PIPELINE");
+  console.log("🚀 ========================================\n");
+
   const { prompt, history } = req;
 
   const initialState: PipelineState = {
     prompt,
     history: history || [],
+    needsClarification: false,
+    clarificationQuestions: [],
+    projectCategory: "unknown",
+    detectedTechStack: [],
+    suggestedTechStack: [],
+    projectComplexity: "moderate",
+    currentThinking: null,
+    thinkingHistory: [],
+    planSections: [],
+    requiredSections: [],
+    generatedSections: new Set<string>(),
+    finalPlan: null,
     retryCount: 0,
-    maxRetries: 2,
+    maxRetries: 3,
     lastError: null,
-    needsInfo: false,
-    clarifyingPrompt: null,
-    type: "other",
-    techStack: [],
-    optimizedPrompt: null,
-    observations: null,
-    approach: null,
-    steps: null,
-    fileStructure: null,
-    markdownPlan: null,
-    failedSection: null,
+    failedNode: null,
   };
 
   try {
+    console.log("⚙️  Invoking state graph...");
+    console.log(
+      `📝 Initial prompt: "${prompt.substring(0, 100)}${
+        prompt.length > 100 ? "..." : ""
+      }"`
+    );
+    console.log(`📚 History length: ${history?.length || 0} messages\n`);
+
     const result = await app.invoke(initialState);
 
+    console.log("\n📊 Pipeline Result Summary:");
+    console.log(`   - Needs Clarification: ${result.needsClarification}`);
+    console.log(`   - Final Plan Generated: ${!!result.finalPlan}`);
+    console.log(`   - Last Error: ${result.lastError || "none"}`);
+    console.log(`   - Failed Node: ${result.failedNode || "none"}`);
+    console.log(`   - Retry Count: ${result.retryCount}/${result.maxRetries}`);
+    console.log(
+      `   - Sections Generated: ${result.generatedSections?.size || 0}/${
+        result.requiredSections?.length || 0
+      }`
+    );
+
     // Handle clarification needed
-    if (result.needsInfo && result.clarifyingPrompt) {
+    if (result.needsClarification && result.clarificationQuestions.length > 0) {
+      const questions = result.clarificationQuestions
+        .map((q, i) => `${i + 1}. ${q}`)
+        .join("\n");
+
+      console.log("\n❓ Clarification needed:");
+      console.log(questions);
+
       return {
         success: false,
         data: null,
-        message: result.clarifyingPrompt,
+        message: `I need more information to create a detailed plan:\n\n${questions}\n\nPlease provide more details about your project.`,
         needsClarification: true,
       };
     }
 
-    // Handle failure cases
-    if (!result.markdownPlan || result.lastError) {
+    // Handle failure
+    if (!result.finalPlan || result.lastError) {
+      console.error("\n❌ Pipeline failed");
+      console.error(`   Error: ${result.lastError}`);
+      console.error(`   Failed node: ${result.failedNode}`);
+      console.error(
+        `   Retry count: ${result.retryCount}/${result.maxRetries}`
+      );
+
+      // Provide helpful error message
+      let errorMessage = "Failed to generate plan. ";
+
+      if (result.retryCount > result.maxRetries) {
+        errorMessage += `Maximum retries (${result.maxRetries}) exceeded. `;
+      }
+
+      if (result.failedNode) {
+        errorMessage += `Issue occurred at: ${result.failedNode}. `;
+      }
+
+      if (result.lastError) {
+        errorMessage += `Details: ${result.lastError}`;
+      } else {
+        errorMessage +=
+          "Please try again with more details or rephrase your request.";
+      }
+
       return {
         success: false,
         data: null,
-        message:
-          result.lastError ||
-          "Failed to generate plan. Please try again with more details.",
+        message: errorMessage,
       };
     }
 
-    // Success case
+    // Success
+    console.log("\n✅ ========================================");
+    console.log("✅ PIPELINE COMPLETED SUCCESSFULLY");
+    console.log("✅ ========================================\n");
+
     const planData: PlanData = {
-      markdown: result.markdownPlan,
+      markdown: result.finalPlan,
       metadata: {
         generated_at: new Date().toISOString(),
-        retryCount: result.retryCount || 0,
-        maxRetries: result.maxRetries || 2,
-        classification: result.type || "unknown",
+        retryCount: result.retryCount,
+        maxRetries: result.maxRetries,
+        classification: result.projectCategory,
       },
     };
 
@@ -885,7 +889,11 @@ export async function runPipeline(
       message: "Plan generated successfully",
     };
   } catch (error) {
-    console.error("Pipeline execution error:", error);
+    console.error("\n❌ ========================================");
+    console.error("❌ PIPELINE EXECUTION ERROR");
+    console.error("❌ ========================================");
+    console.error(error);
+
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error occurred";
 
