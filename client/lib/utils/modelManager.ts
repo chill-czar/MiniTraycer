@@ -1,6 +1,6 @@
 // lib/utils/modelManager.ts
 import { getRedisClient } from "../redis/client";
-import { ModelConfig, APIKeyInfo } from "@/types/generatePlan";
+import { ModelConfig, APIKeyInfo } from "@/types/api";
 import { RateLimitManager } from "./rateLimitManager";
 
 const MODEL_CONFIG_KEY = "models:config";
@@ -23,6 +23,8 @@ export class ModelManager {
       process.env.GROQ_API_KEY,
       process.env.GROQ_API_KEY_2,
       process.env.GROQ_API_KEY_3,
+      process.env.GROQ_API_KEY_4,
+      process.env.GROQ_API_KEY_5,
     ].filter(Boolean) as string[];
 
     if (apiKeys.length === 0) {
@@ -67,24 +69,6 @@ export class ModelManager {
         limits: { rpm: 30, rpd: 1000, tpm: 30000, tpd: 500000 },
       },
       {
-        modelName: "moonshotai/kimi-k2-instruct",
-        apiKeys: apiKeys.map(createKeyInfo),
-        priority: 5,
-        limits: { rpm: 60, rpd: 1000, tpm: 10000, tpd: 300000 },
-      },
-      {
-        modelName: "moonshotai/kimi-k2-instruct-0905",
-        apiKeys: apiKeys.map(createKeyInfo),
-        priority: 6,
-        limits: { rpm: 60, rpd: 1000, tpm: 10000, tpd: 300000 },
-      },
-      {
-        modelName: "gemma2-9b-it",
-        apiKeys: apiKeys.map(createKeyInfo),
-        priority: 7,
-        limits: { rpm: 30, rpd: 14400, tpm: 15000, tpd: 500000 },
-      },
-      {
         modelName: "meta-llama/llama-guard-4-12b",
         apiKeys: apiKeys.map(createKeyInfo),
         priority: 8,
@@ -102,14 +86,7 @@ export class ModelManager {
         priority: 10,
         limits: { rpm: 30, rpd: 14400, tpm: 15000, tpd: 500000 },
       },
-      {
-        modelName: "llama-3.1-8b-instant",
-        apiKeys: apiKeys.map(createKeyInfo),
-        priority: 11,
-        limits: { rpm: 30, rpd: 14400, tpm: 6000, tpd: 500000 },
-      }
     ];
-
 
     const redis = await getRedisClient();
     await redis.set(MODEL_CONFIG_KEY, JSON.stringify(models));
@@ -217,7 +194,6 @@ export class ModelManager {
       }
     }
 
- 
     const fallbacks = models
       .filter((m) => m.modelName !== currentModel)
       .sort((a, b) => a.priority - b.priority);

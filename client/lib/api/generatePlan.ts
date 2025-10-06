@@ -2,7 +2,7 @@ import api from "@/config/axios";
 import {
   GeneratePlanRequest,
   GeneratePlanResponse,
-} from "@/types/generatePlan";
+} from "@/types/api";
 import { AxiosError } from "axios";
 
 export async function generatePlan(

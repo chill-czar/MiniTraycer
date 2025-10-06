@@ -1,5 +1,5 @@
 // lib/utils/contextManager.ts
-import { ChatMessage } from "@/types/generatePlan";
+import { ChatMessage } from "@/types/domain";
 import { estimateTokens, truncateToTokenLimit } from "./tokenUtils";
 import { LLMInvoker } from "./llmInvoker";
 import { PROMPTS } from "./prompts";

@@ -6,7 +6,7 @@ import {
   extractTextContent,
   estimateTokens,
 } from "./tokenUtils";
-import { LLMInvokeOptions, LLMInvokeResult } from "@/types/generatePlan";
+import { LLMInvokeOptions, LLMInvokeResult } from "@/types/api";
 
 export class LLMInvoker {
   private modelManager = ModelManager.getInstance();
@@ -44,8 +44,8 @@ export class LLMInvoker {
           ...result,
           modelUsed: currentKey.model,
         };
-      } catch {
-        
+      } catch (error) {
+        console.error(`LLM call failed for ${currentKey.model}:`, error);
         await this.modelManager.markFailed(currentKey.model, currentKey.key);
 
         const nextKey = await this.modelManager.getNextKey(

@@ -1,6 +1,6 @@
 // lib/utils/rateLimitManager.ts
 import { getRedisClient } from "../redis/client";
-import { RateLimitMetrics, ModelLimits } from "@/types/generatePlan";
+import { RateLimitMetrics, ModelLimits } from "@/types/api";
 
 const ONE_MINUTE = 60 * 1000;
 const ONE_DAY = 24 * 60 * 60 * 1000;

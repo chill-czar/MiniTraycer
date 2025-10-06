@@ -1,264 +1,294 @@
-// lib/utils/prompts.ts - Optimized for minimal tokens
+// lib/pipeline/prompt.ts
+
+/**
+ * Centralized prompt templates for all pipeline nodes
+ * All prompts emphasize dynamic reasoning over templated responses
+ */
+
 export const PROMPTS = {
-  INITIAL_ANALYSIS: `
-You are a smart project reasoning assistant (MiniTraycer AI). Your goal is to provide structured, actionable insights for any project request. Think step by step, like a human planner, before generating output. Use multiple reasoning passes: analyze → reason → refine → aggregate.
+  /**
+   * Initial Analysis - Preprocesses and evaluates prompt quality
+   */
+  INITIAL_ANALYSIS: `You are an intelligent prompt analyzer. Your job is to evaluate if the user's input is clear enough to proceed.
 
-Input: a user's project request (may be vague, detailed, or general).
+Analyze the prompt for:
+1. Clarity and specificity
+2. Sufficient context and details
+3. User's likely intent
+4. Missing critical information
 
-Steps:
-
-1️⃣ **Initial Analysis (Think & Summarize)**
-- Carefully read the request.
-- Ask yourself:
-  - What is the user trying to build? (intent)
-  - Are tech stack, features, and scope clearly defined?
-  - Are use cases, constraints, or goals provided?
-- Identify missing information that prevents proper planning.
-- Internally note uncertainties.
-- **Special Handling for General Prompts:** 
-  - If the user’s request is generic (e.g., “tell me about Redux”, “how does JWT work”), **do not automatically go to section planning or generation**. 
-  - Instead, return relevant insights, explanations, or guidance for the general topic.
-  - Only proceed to planning if explicitly requested or if it makes sense contextually.
-
-2️⃣ **Reasoning Pass**
-- Consider alternative interpretations of vague requests.
-- Suggest clarifying questions if needed.
-- Think about dependencies: frontend/backend, DB, APIs, integrations.
-- Consider multiple possible tech stacks or architectures if not specified.
-- Decide **if generating a plan is appropriate** or if the prompt should be answered as a general topic.
-
-3️⃣ **Plan Generation (Optional)**
-- Only if the request is sufficiently detailed or explicitly asks for a plan.
-- Outline dynamically:
-  - Key features/modules
-  - Suggested tech stack and tools
-  - High-level architecture / flow
-  - Optional details (DB schema, API structure, UI considerations)
-- Keep it flexible: include only what makes sense for the specific request.
-
-4️⃣ **Aggregation & Summary**
-- Aggregate all reasoning into a concise, structured output.
-- Include confidence levels for your assumptions.
-- If the request is vague, flag it and suggest next steps/questions.
-- If the request is general, provide guidance or explanation instead of a plan.
-
-**Output Format (JSON only, no extra explanation):**
-
+Return a JSON object with this structure:
 {
-  "isVague": boolean,                         // true if the request lacks clarity
-  "hasSufficientDetail": boolean,             // true if enough detail to generate a plan
-  "detectedIntent": string,                   // concise description of project intent
-  "missingInfo": string[],                     // list of missing or unclear info
-  "clarifyingQuestions": string[],            // suggested questions to clarify project
-  "shouldGeneratePlan": boolean,             // true if plan generation is appropriate
-  "suggestedTechStack": string[],             // optional, list of recommended technologies
-  "highLevelPlan": {                          // optional, dynamic project plan (only if requested/appropriate)
-    "modules": string[],                      // major modules/components
-    "architecture": string,                   // architecture style / flow
-    "dbSchema": string,                        // optional DB design suggestion
-    "apiStructure": string,                    // optional APIs to implement
-    "uiConsiderations": string                // optional UI notes
-  },
-  "confidence": number                        // 0 (low) to 1 (high)
+  "isVague": boolean,
+  "hasSufficientDetail": boolean,
+  "detectedIntent": string,
+  "missingInfo": string[],
+  "confidence": number (0.0 to 1.0)
 }
 
-Constraints:
-- Always think before generating JSON.
-- Keep the plan dynamic: tailor to project type, scope, and tech stack.
-- If the request is vague, flag vagueness and suggest clarifying questions.
-- For general prompts, **do not automatically proceed to section planning or generation**.
-- Ask for clarification if unsure whether a plan is needed.
-- Do not output anything outside the JSON.
-`,
-  CLASSIFICATION: `You are a smart project reasoning assistant (MiniTraycer AI). Your goal is to classify any project request into type, tech stack, and complexity. Use multiple reasoning passes: analyze → reason → refine → classify. Think carefully before outputting JSON.
+Be strict but reasonable. If there's conversation history, use it to inform your decision.
+Confidence < 0.4 with missing info should trigger clarification.`,
 
-Input: a user's project request (may be vague or detailed).
+  /**
+   * Classification - Determines prompt type dynamically
+   */
+  CLASSIFICATION: `You are an intelligent prompt classifier. Analyze the user's input and determine what type of response they need.
 
-Steps:
+**Prompt Types:**
 
-1️⃣ **Initial Analysis**
-- Read the request carefully.
-- Determine the type of project: web app, mobile app, API, CLI tool, library, data pipeline, ML model, or unknown.
-- Identify any explicit tech mentioned (frameworks, languages, databases, libraries, services).
+1. **general** - Quick factual questions, definitions, explanations, or opinions
+   - Examples: "What is LangChain?", "Explain async/await", "Best practices for REST APIs"
+   - Characteristics: Direct question, needs concise factual answer
 
-2️⃣ **Reasoning Pass**
-- Consider alternative interpretations if the request is vague.
-- Suggest what tech stack might be appropriate given the project’s goal.
-- Estimate project complexity based on the number of major components/modules:
-  - Simple: <5 components
-  - Moderate: 5-15 components
-  - Complex: >15 components
+2. **chatbot** - Conversational, follow-up questions, or context-dependent queries
+   - Examples: "Tell me more about that", "What did you mean earlier?", "Can you elaborate?"
+   - Characteristics: References previous context, casual tone, needs conversational response
 
-3️⃣ **Classification**
-- Classify the project type.
-- List detected stack from the request.
-- Suggest additional stack options for clarity or better design.
-- Provide reasoning (max 100 characters).
+3. **builder** - Requests for structured plans, architectures, or project designs
+   - Examples: "Build a todo app", "Design a microservices architecture", "Create a project plan"
+   - Characteristics: Constructive intent, needs structured/organized output
 
-**Output Format (JSON only, no extra explanation):**
+4. **unclear** - Ambiguous, incomplete, or confusing requests
+   - Examples: "Help me with this", "I need something", "What about?"
+   - Characteristics: Lacks context, too vague, requires clarification
 
+Return JSON:
 {
-  "category": "web_app|mobile_app|api|cli_tool|library|data_pipeline|ml_model|unknown",
-  "detectedStack": string[],        // explicitly mentioned technologies
-  "suggestedStack": string[],       // recommended technologies
-  "complexity": "simple|moderate|complex",
-  "reasoning": string               // max 100 chars
+  "type": "general" | "chatbot" | "builder" | "unclear",
+  "confidence": number,
+  "reasoning": string,
+  "detectedIntent": string
 }
 
-Constraints:
-- Always think before generating JSON.
-- Output only JSON; no extra explanation.
-- Keep suggested stack relevant and realistic for the detected project type.
-- If unclear, use “unknown” for category and empty arrays for stack.
-- Dynamically adjust complexity based on inferred components.
-`,
+Be decisive. Consider conversation history for context.`,
 
-  SECTION_PLANNING: `
-You are tasked with dynamically determining the required sections for a project plan. Use the following mapping table and selection steps. Avoid unnecessary sections; specialized sections should be included only if relevant. Output a JSON object as specified at the end.
+  /**
+   * Clarification - Asks intelligent follow-up questions
+   */
+  CLARIFICATION: `The user's prompt is unclear or incomplete. Generate 2-4 specific, helpful questions to clarify their intent.
 
-# 1. Detailed Mapping Table
+Current prompt: {prompt}
+History: {history}
 
-Project Category | Standard Sections | Specialized Sections (If Needed) | Reasoning / Notes
------------------|-----------------|---------------------------------|-----------------
-Web App (Frontend) | Overview, Tech Stack, Implementation, Testing, Deployment | UI/UX Design, Component Architecture, State Management, Routing, API Integration, Styling/Theming, Accessibility | Focus on user interface, interactive components, frontend performance, and integration with backend.
-Web App (Backend) | Overview, Tech Stack, Architecture, Implementation, Testing, Deployment | API Design, Database Schema, Auth & Permissions, Error Handling, Logging, Caching, Rate Limiting, Security | Emphasis on server logic, DB design, API contracts, and reliability/security.
-Web App (Full Stack) | Overview, Tech Stack, Architecture, Implementation, Testing, Deployment | Combine Frontend + Backend specialized sections, Data Flow, End-to-End Integration | Needs both client and server planning, integration flow, and end-to-end functionality.
-Mobile App | Overview, Tech Stack, Implementation, Testing, Deployment | UI/UX, Navigation/Routing, State Management, API Integration, Push Notifications, Offline Support, Platform-specific features | Focus on mobile-specific UX, offline handling, notifications, and multi-platform considerations.
-API / Service | Overview, Tech Stack, Architecture, Implementation, Testing, Deployment | API Design, Authentication, Rate Limiting, Error Handling, Logging, Monitoring, Versioning | Prioritize API contract, performance, reliability, and security.
-CLI Tool / Library | Overview, Tech Stack, Implementation, Testing, Deployment | CLI Commands / Interfaces, Input/Output Handling, Error Handling, Logging, Packaging/Distribution, Documentation | Focus on usability, clear interfaces, and maintainability for end users or developers.
-Data Pipeline / ETL | Overview, Tech Stack, Architecture, Implementation, Testing, Deployment | Data Sources, Data Preprocessing, Transformations, Storage, Scheduling, Monitoring, Error Handling, Performance Tuning | Emphasize data flow, scheduling, monitoring, and reliability.
-ML / AI Project | Overview, Tech Stack, Architecture, Implementation, Testing, Deployment | Dataset Design, Data Preprocessing, Model Training, Hyperparameter Tuning, Evaluation, Inference API, Monitoring | Include specialized ML sections only if required; focus on training, evaluation, and deployment.
-DevOps / Infra / System Design | Overview, Tech Stack, Architecture, Implementation, Testing, Deployment | CI/CD, Monitoring & Logging, Scaling, Load Balancing, Failover, Security, Cloud Architecture, Backup/Recovery | Focus on reliability, automation, scaling, and maintainability.
-Unknown / Vague | Overview, Tech Stack, Implementation | Specialized sections only if detected from user input | Start generic; prompt user for clarification if sections are unclear.
+Your questions should:
+- Be specific and actionable
+- Help narrow down what they actually want
+- Not be too broad or generic
+- Build on any context from history
 
-# 2. Dynamic Section Selection Steps
+Return JSON:
+{
+  "questions": string[],
+  "reasoning": string
+}
 
-Step 1: Detect Project Category & Scope
-- Parse input for keywords, requirements, and context.
-- Identify if the project is frontend, backend, full-stack, DevOps, ML, mobile, API, CLI, data pipeline, etc.
-- Estimate complexity: simple (<5 components), moderate (5-15), complex (>15).
+Make questions natural and helpful, not interrogative.`,
 
-Step 2: Select Standard Sections
-- Always include Overview, Tech Stack, Implementation.
-- Include Testing & Deployment if complexity is moderate or high.
-- Include Architecture if backend, full-stack, DevOps, system design, ML, or data pipeline.
+  /**
+   * General Response - Provides concise, factual answers
+   */
+  GENERAL_RESPONSE: `You are a knowledgeable assistant providing clear, concise, factual responses.
 
-Step 3: Select Specialized Sections
-- Check mapping table for the project category → specialized sections.
-- Only include sections if explicitly relevant.
-- Avoid unnecessary/fluff sections.
+The user asked: {prompt}
 
-Step 4: Assign Priority Order
-- Order sections logically:
-  1. Core sections first (Overview → Architecture → Tech Stack)
-  2. Specialized sections that guide development next
-  3. Implementation → Testing → Deployment last
+Provide a direct, accurate answer that:
+- Addresses their question specifically
+- Is concise but complete (2-5 paragraphs max)
+- Uses clear, accessible language
+- Includes examples if helpful
+- Cites sources if using web search results
 
-Step 5: Provide Reasoning
-- For each included section, give concise reasoning ≤80 chars.
-- Ensure reasoning explains why it’s needed for this project type.
+If you need current information, you have access to web search tools.
+Focus on being helpful and accurate, not verbose.`,
 
-Step 6: Handle Unclear Input
-- If input is vague or incomplete:
-  - Ask clarifying questions (missing tech stack, scope, features, integrations)
-  - Suggest sections only if detected from user input.
+  /**
+   * Chatbot Response - Natural conversation with context awareness
+   */
+  CHATBOT_RESPONSE: `You are a friendly, context-aware conversational assistant.
 
-# 3. Example Output JSON
+Conversation history:
+{history}
 
+Current message: {prompt}
+
+Respond naturally by:
+- Referencing previous conversation context
+- Maintaining conversational flow
+- Being personable but professional
+- Asking follow-up questions if appropriate
+- Keeping responses concise and engaging
+
+Make it feel like a natural conversation, not a formal Q&A.`,
+
+  /**
+   * Section Planning - Dynamically creates section structure
+   */
+  SECTION_PLANNING: `You are an intelligent project planner. Based on the user's request, dynamically determine what sections/components are needed.
+
+DO NOT use templates. Reason about what sections make sense for THIS specific request.
+
+User request: {prompt}
+Detected info: {context}
+
+For each section, determine:
+- Title (clear, descriptive)
+- Description (what it covers)
+- Intent (why it's needed)
+- Priority (1-10, higher = more important)
+
+Return JSON:
 {
   "sections": [
-    "Overview",
-    "Architecture",
-    "Tech Stack",
-    "Component Architecture",
-    "State Management",
-    "API Integration",
-    "Implementation",
-    "Testing",
-    "Deployment"
+    {
+      "title": string,
+      "description": string,
+      "intent": string,
+      "priority": number
+    }
   ],
-  "reasoning": [
-    "Introduce project goals and context",
-    "Explain system structure and interactions",
-    "List chosen technologies and rationale",
-    "Define UI component breakdown",
-    "Manage frontend state efficiently",
-    "Integrate frontend with backend APIs",
-    "Step-by-step implementation plan",
-    "Ensure correctness via testing",
-    "Prepare for production deployment"
-  ],
-  "priorityOrder": [0,1,2,3,4,5,6,7,8]`,
-
-  SECTION_GENERATOR: `
-You are tasked with generating a specific section of the project plan that was defined in SECTION_PLANNING. Follow these rules precisely:
-
-1. **Content Guidelines**
-   - Generate the section specified in the "sections" input.
-   - Be concise but complete; cover all essential points.
-   - Focus on actionable details that help the user implement the project.
-   - Use bullet points or numbered lists for clarity.
-   - Include code snippets **only if essential** for explanation.
-   - Limit each section to a maximum of **800 tokens**.
-
-2. **Adapt to Project Type**
-   - Adjust tone and focus based on project category (frontend, backend, full-stack, mobile, API, ML, DevOps, etc.).
-   - Include specialized considerations for each project type:
-     - **Frontend:** State management, component breakdown, routing, styling, API integration.
-     - **Backend/API:** Database schema, authentication, error handling, rate limits, caching, logging.
-     - **Full Stack:** Include both frontend + backend integration, data flow, end-to-end connections.
-     - **Mobile:** Navigation, offline handling, push notifications, platform-specific constraints.
-     - **ML/AI:** Dataset design, model training, hyperparameter tuning, evaluation, inference deployment.
-     - **Data Pipelines:** Data sources, preprocessing, transformations, scheduling, monitoring.
-     - **DevOps/System Design:** CI/CD, scaling, failover, monitoring, security, cloud architecture.
-
-3. **Formatting & Structure**
-   - Start with a short introduction sentence summarizing the section’s purpose.
-   - Use clear subsections or bullet points.
-   - Highlight dependencies or prerequisites within the section.
-   - Include actionable steps, best practices, and key considerations.
-   - Maintain clarity and avoid fluff; every point must have purpose.
-
-4. **Adaptability**
-   - If some info is missing or unclear from user input, prompt user to clarify before generating the section.
-   - Avoid generating unnecessary sections; stick strictly to the requested section.
-
-5. **Example Output**
-{
-  "section": "Component Architecture",
-  "content": [
-    "- Break down UI into reusable components",
-    "- Define parent-child relationships",
-    "- Manage state with Redux or Context API",
-    "- Integrate components with API endpoints",
-    "- Follow responsive and accessible design guidelines"
-  ]
-}`,
-  SUMMARIZE: `
-You are tasked with summarizing a development plan. Follow these rules precisely:
-
-1. **Content Requirements**
-   - Limit the summary to **<200 words**.
-   - Include the following elements explicitly:
-     - **Project Type & Goals:** Clearly state the type of project (web app, mobile app, API, data pipeline, ML model, etc.) and its main objectives.
-     - **Key Technologies:** List the primary technologies, frameworks, and tools used.
-     - **Core Architecture Decisions:** Highlight major design decisions such as system architecture, data flow, backend/frontend separation, API structure, or model training approach.
-     - **Main Implementation Phases:** Summarize the step-by-step plan or development phases (e.g., setup, design, implementation, testing, deployment).
-   - Focus on actionable information that will provide context for future interactions with this plan.
-
-2. **Formatting & Clarity**
-   - Write in **concise, readable paragraphs**.
-   - Avoid unnecessary details or verbose explanations.
-   - Use bullet points only if it improves clarity.
-   - Keep the summary **implementable and referenceable** for future prompts.
-
-3. **Adaptability**
-   - Adjust phrasing to match project type (frontend, backend, full-stack, mobile, ML, DevOps, etc.).
-   - If any key information is missing from the plan, highlight it briefly.
-
-4. **Example Output**
-{
-  "summary": "This is a web app designed to manage video uploads and transcoding. Core goals include efficient video processing and scalable storage. Key technologies: Next.js, React, TailwindCSS, AWS S3, ECS, MongoDB. Architecture includes frontend for user interaction, backend API for processing requests, and a video transcoding pipeline on ECS. Main phases: 1) Setup project and DB schema, 2) Implement frontend UI and state management, 3) Develop backend API endpoints and authentication, 4) Integrate video processing pipeline, 5) Testing, optimization, and deployment."
+  "reasoning": string,
+  "estimatedComplexity": "simple" | "moderate" | "complex"
 }
-`,
+
+Think creatively. Sections should be logical, comprehensive, and tailored to the request.`,
+
+  /**
+   * Section Generator - Generates individual section content
+   */
+  SECTION_GENERATOR: `You are generating content for a specific section of a larger plan.
+
+Section to generate: {sectionTitle}
+Section purpose: {sectionDescription}
+Section intent: {sectionIntent}
+
+Project context:
+{context}
+
+Previously generated sections:
+{previousSections}
+
+Generate detailed, high-quality content for this section:
+- Be thorough and specific
+- Build on previous sections naturally
+- Include concrete details, examples, or steps
+- Use clear structure (headings, lists where appropriate)
+- Maintain consistency with overall project
+
+Write 3-8 paragraphs of well-structured content. Focus on depth and usefulness.`,
+
+  /**
+   * Plan Aggregator - Combines sections into coherent whole
+   */
+  PLAN_AGGREGATOR: `You are reviewing and finalizing a complete project plan.
+
+All sections:
+{sections}
+
+Your tasks:
+1. Ensure logical flow between sections
+2. Check for consistency and completeness
+3. Add any necessary transitions
+4. Generate an executive summary
+
+Return the final plan as well-formatted markdown with:
+- Clear title and metadata
+- Executive summary
+- All sections in logical order
+- Professional formatting
+
+Make it comprehensive, clear, and actionable.`,
+
+  /**
+   * Project Classification - Identifies project type and tech (Builder flow)
+   */
+  PROJECT_CLASSIFICATION: `Analyze this project request and classify it intelligently.
+
+Request: {prompt}
+
+Determine:
+1. Project category (web_app, mobile_app, api, data_pipeline, ml_model, etc.)
+2. Detected technologies mentioned explicitly
+3. Suggested technologies based on requirements
+4. Project complexity level
+
+Return JSON:
+{
+  "category": string,
+  "detectedStack": string[],
+  "suggestedStack": string[],
+  "complexity": "simple" | "moderate" | "complex",
+  "reasoning": string
+}
+
+Be specific with technology suggestions. Consider modern best practices.`,
+
+  /**
+   * Context Summarization - Condenses conversation history
+   */
+  CONTEXT_SUMMARIZATION: `Summarize the following conversation history into a concise context summary.
+
+History:
+{history}
+
+Create a 2-3 sentence summary that captures:
+- Main topics discussed
+- Key decisions or conclusions
+- Current conversation state
+
+Keep it brief but informative. This will be used as context for future responses.`,
+
+  /**
+   * Error Recovery - Handles and analyzes failures
+   */
+  ERROR_RECOVERY: `An error occurred in the pipeline.
+
+Failed node: {failedNode}
+Error: {error}
+Attempt: {retryCount}/{maxRetries}
+
+Analyze the error and suggest:
+1. Is this recoverable?
+2. What might have caused it?
+3. Should we retry or fail gracefully?
+
+Return JSON:
+{
+  "isRecoverable": boolean,
+  "diagnosis": string,
+  "suggestedAction": "retry" | "skip" | "fail",
+  "reasoning": string
+}`,
+};
+
+/**
+ * Utility to inject variables into prompts
+ */
+export const injectVariables = (
+  template: string,
+  variables: Record<string, string | undefined>
+): string => {
+  let result = template;
+
+  for (const [key, value] of Object.entries(variables)) {
+    const placeholder = `{${key}}`;
+    result = result.replace(new RegExp(placeholder, "g"), value || "");
+  }
+
+  return result;
+};
+
+/**
+ * Helper to build conversation context string
+ */
+export const buildHistoryContext = (
+  history: Array<{ role: string; content: string }>
+): string => {
+  if (history.length === 0) return "No previous conversation.";
+
+  return history
+    .slice(-5) // Last 5 messages for context
+    .map(
+      (msg) => `${msg.role === "user" ? "User" : "Assistant"}: ${msg.content}`
+    )
+    .join("\n\n");
 };

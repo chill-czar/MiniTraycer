@@ -1,4 +1,4 @@
-import { ChatMessage } from "@/types/generatePlan";
+import { ChatMessage } from "@/types/domain";
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 
 interface ChatState {

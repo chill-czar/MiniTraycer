@@ -56,16 +56,16 @@ const markdownComponents: Components = {
   li: ({ ...props }) => <li className="mb-1 break-words" {...props} />,
 
   table: ({ ...props }) => (
-    <div className="overflow-x-auto my-2">
+    <div className="overflow-x-auto my-2 max-w-full">
       <table
-        className="table-auto border border-border text-sm w-full"
+        className="table-auto border border-border text-sm w-full min-w-max"
         {...props}
       />
     </div>
   ),
   th: ({ ...props }) => (
     <th
-      className="border px-2 py-1 bg-muted font-medium text-left"
+      className="border px-2 py-1 bg-muted font-medium text-left whitespace-nowrap"
       {...props}
     />
   ),
@@ -89,21 +89,23 @@ const markdownComponents: Components = {
     }
 
     return (
-      <pre
-        className={`overflow-x-auto text-sm rounded my-3 p-3 ${
-          match ? `language-${match[1]}` : ""
-        }`}
-      >
-        <code className={className} {...rest}>
-          {children}
-        </code>
-      </pre>
+      <div className="overflow-x-auto my-3 max-w-full">
+        <pre
+          className={`text-sm rounded p-3 min-w-max ${
+            match ? `language-${match[1]}` : ""
+          }`}
+        >
+          <code className={className} {...rest}>
+            {children}
+          </code>
+        </pre>
+      </div>
     );
   },
 
   blockquote: ({ ...props }) => (
     <blockquote
-      className="border-l-2 border-muted pl-3 italic text-muted my-2 break-words"
+      className="border-l-2 border-muted pl-3 italic text-muted my-2 break-words overflow-x-auto"
       {...props}
     />
   ),
@@ -111,14 +113,15 @@ const markdownComponents: Components = {
   img: ({ src, alt, ...props }) => {
     if (!src) return null;
 
-
     return (
-      <img
-        src={src}
-        alt={alt || ""}
-        className="rounded max-w-full my-2"
-        {...props}
-      />
+      <div className="overflow-x-auto my-2 max-w-full">
+        <img
+          src={src}
+          alt={alt || ""}
+          className="rounded max-w-full"
+          {...props}
+        />
+      </div>
     );
   },
   a: ({ ...props }) => (
@@ -129,7 +132,7 @@ const markdownComponents: Components = {
 
 export default function OptimizedMarkdown({ content }: OptimizedMarkdownProps) {
   return (
-    <div className="w-full max-w-full overflow-x-hidden">
+    <div className="w-full max-w-full overflow-x-auto">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
         rehypePlugins={[rehypeRaw, rehypeKatex, rehypePrism]}
