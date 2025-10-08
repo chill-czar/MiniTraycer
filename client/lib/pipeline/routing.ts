@@ -1,245 +1,172 @@
-// lib/pipeline/routing.ts - FULLY OPTIMIZED
 import { PipelineState } from "./state";
 import { END } from "@langchain/langgraph";
+import { Logger } from "../utils/logger";
 
-/**
- * After Initial Analysis - OPTIMIZED
- */
+const logger = Logger.getInstance();
+
 export const afterInitialAnalysis = (state: PipelineState): string => {
   if (state.lastError) {
-    console.log(
-      `[Routing] initialAnalysis → retry (error: ${state.lastError})`
-    );
+    logger.logExecution("Routing: initialAnalysis → retry", {
+      error: state.lastError,
+      step: state.stepCount,
+    });
     return "retryHandlerNode";
   }
 
   if (state.needsClarification && state.clarificationQuestions.length > 0) {
-    console.log(`[Routing] initialAnalysis → END (needs clarification)`);
-    return END;
+    logger.logExecution("Routing: initialAnalysis → clarification", {
+      questionCount: state.clarificationQuestions.length,
+      questions: state.clarificationQuestions,
+      step: state.stepCount,
+    });
+    return "clarificationNode";
   }
 
-  console.log(`[Routing] initialAnalysis → classification`);
-  return "classificationNode";
+  logger.logExecution("Routing: initialAnalysis → sectionPlanning", {
+    confidence: state.intentConfidence,
+    step: state.stepCount,
+  });
+  return "sectionPlanningNode";
 };
 
-/**
- * After Classification - OPTIMIZED with smart routing
- */
-export const afterClassification = (state: PipelineState): string => {
-  if (state.lastError) {
-    console.log(`[Routing] classification → retry (error: ${state.lastError})`);
-    return "retryHandlerNode";
-  }
-
-  // Data-driven routing based on classification result
-  const route = (() => {
-    switch (state.promptType) {
-      case "general":
-        return "generalResponseNode";
-      case "chatbot":
-        return "chatbotResponseNode";
-      case "builder":
-        return "sectionPlanningNode";
-      case "unclear":
-        return "clarificationNode";
-      default:
-        // Fallback based on confidence and history
-        if (state.intentConfidence && state.intentConfidence < 0.5) {
-          return "clarificationNode";
-        }
-        return state.history.length > 0
-          ? "chatbotResponseNode"
-          : "generalResponseNode";
-    }
-  })();
-
-  console.log(
-    `[Routing] classification → ${route} (type: ${state.promptType}, confidence: ${state.intentConfidence})`
-  );
-  return route;
-};
-
-/**
- * After Clarification
- */
 export const afterClarification = (state: PipelineState): string => {
-  console.log(`[Routing] clarification → END (awaiting user input)`);
+  logger.logExecution("Routing: clarification → END (awaiting user input)", {
+    step: state.stepCount,
+  });
   return END;
 };
 
-/**
- * After General Response
- */
-export const afterGeneralResponse = (state: PipelineState): string => {
-  if (state.lastError) {
-    console.log(
-      `[Routing] generalResponse → retry (error: ${state.lastError})`
-    );
-    return "retryHandlerNode";
-  }
-
-  console.log(`[Routing] generalResponse → END (complete)`);
-  return END;
-};
-
-/**
- * After Chatbot Response
- */
-export const afterChatbotResponse = (state: PipelineState): string => {
-  if (state.lastError) {
-    console.log(
-      `[Routing] chatbotResponse → retry (error: ${state.lastError})`
-    );
-    return "retryHandlerNode";
-  }
-
-  console.log(`[Routing] chatbotResponse → END (complete)`);
-  return END;
-};
-
-/**
- * After Section Planning - OPTIMIZED with validation
- */
 export const afterSectionPlanning = (state: PipelineState): string => {
   if (state.lastError) {
-    console.log(
-      `[Routing] sectionPlanning → retry (error: ${state.lastError})`
-    );
+    logger.logExecution("Routing: sectionPlanning → retry", {
+      error: state.lastError,
+      step: state.stepCount,
+    });
     return "retryHandlerNode";
   }
 
-  // Validate sections were planned
   if (!state.sections || state.sections.length === 0) {
-    console.log(`[Routing] sectionPlanning → retry (no sections planned)`);
+    logger.logExecution("Routing: sectionPlanning → retry (no sections)", {
+      step: state.stepCount,
+    });
     return "retryHandlerNode";
   }
 
-  console.log(
-    `[Routing] sectionPlanning → sectionGenerator (${state.sections.length} sections to generate)`
-  );
+  logger.logExecution("Routing: sectionPlanning → sectionGenerator", {
+    sectionCount: state.sections.length,
+    sections: state.sections.map((s) => s.title),
+    step: state.stepCount,
+  });
   return "sectionGeneratorNode";
 };
 
-/**
- * After Section Generator - OPTIMIZED looping logic
- */
 export const afterSectionGenerator = (state: PipelineState): string => {
   if (state.lastError) {
-    // Check if error is recoverable
     const isRecoverable =
       state.lastError.includes("timeout") ||
       state.lastError.includes("rate limit") ||
       state.lastError.includes("network");
 
     if (isRecoverable && state.retryCount < state.maxRetries) {
-      console.log(
-        `[Routing] sectionGenerator → retry (recoverable error: ${state.lastError})`
-      );
+      logger.logExecution("Routing: sectionGenerator → retry (recoverable)", {
+        error: state.lastError,
+        retryCount: state.retryCount,
+        step: state.stepCount,
+      });
       return "retryHandlerNode";
     }
 
-    // If not recoverable and we have some sections, try to aggregate what we have
     if (state.planSections.length > 0) {
-      console.log(
-        `[Routing] sectionGenerator → aggregator (partial plan, ${state.planSections.length} sections)`
-      );
+      logger.logExecution("Routing: sectionGenerator → aggregator (salvage)", {
+        partialSections: state.planSections.length,
+        error: state.lastError,
+        step: state.stepCount,
+      });
       return "planAggregatorNode";
     }
 
-    console.log(`[Routing] sectionGenerator → retry (unrecoverable error)`);
+    logger.logExecution("Routing: sectionGenerator → retry (unrecoverable)", {
+      error: state.lastError,
+      step: state.stepCount,
+    });
     return "retryHandlerNode";
   }
 
   const totalSections = state.sections?.length || 0;
   const generatedCount = state.generatedSections.size;
 
-  // All sections complete
   if (generatedCount >= totalSections && totalSections > 0) {
-    console.log(
-      `[Routing] sectionGenerator → aggregator (${generatedCount}/${totalSections} sections complete)`
-    );
+    logger.logExecution("Routing: sectionGenerator → aggregator (complete)", {
+      totalSections,
+      generatedCount,
+      step: state.stepCount,
+    });
     return "planAggregatorNode";
   }
 
-  // More sections to generate
-  console.log(
-    `[Routing] sectionGenerator → sectionGenerator (${generatedCount}/${totalSections} sections done, looping)`
-  );
+  const remaining =
+    state.sections?.filter((s) => !state.generatedSections.has(s.title)) || [];
+
+  logger.logExecution("Routing: sectionGenerator → sectionGenerator (loop)", {
+    progress: `${generatedCount}/${totalSections}`,
+    remaining: remaining.map((s) => s.title),
+    step: state.stepCount,
+  });
   return "sectionGeneratorNode";
 };
 
-/**
- * After Plan Aggregator
- */
 export const afterPlanAggregator = (state: PipelineState): string => {
-  console.log(`[Routing] planAggregator → END (plan complete)`);
+  logger.logExecution("Routing: planAggregator → END (complete)", {
+    planLength: state.finalPlan?.length || 0,
+    step: state.stepCount,
+  });
   return END;
 };
 
-/**
- * After Retry Handler - OPTIMIZED with contextual routing
- */
 export const afterRetry = (state: PipelineState): string => {
-  // Max retries exceeded - try to salvage what we have
   if (state.retryCount > state.maxRetries) {
-    console.log(
-      `[Routing] retry → salvage mode (max retries exceeded: ${state.retryCount}/${state.maxRetries})`
-    );
+    logger.logExecution("Routing: retry → salvage/END", {
+      retryCount: state.retryCount,
+      maxRetries: state.maxRetries,
+      step: state.stepCount,
+    });
 
-    // If we have partial plan sections, aggregate them
     if (state.planSections.length > 0) {
-      console.log(
-        `[Routing] retry → aggregator (salvaging ${state.planSections.length} sections)`
-      );
+      logger.logExecution("Routing: retry → aggregator (salvage)", {
+        partialSections: state.planSections.length,
+        step: state.stepCount,
+      });
       return "planAggregatorNode";
     }
 
-    // If we have a partial response, end here
-    if (state.finalResponse) {
-      console.log(`[Routing] retry → END (has partial response)`);
-      return END;
-    }
-
-    // Otherwise give up
-    console.log(`[Routing] retry → END (giving up, no salvageable output)`);
+    logger.logExecution("Routing: retry → END (max retries)", {
+      step: state.stepCount,
+    });
     return END;
   }
 
-  // Map failed nodes to retry targets
   const nodeMap: Record<string, string> = {
     initialAnalysis: "initialAnalysisNode",
-    classification: "classificationNode",
     clarification: "clarificationNode",
-    generalResponse: "generalResponseNode",
-    chatbotResponse: "chatbotResponseNode",
     sectionPlanning: "sectionPlanningNode",
     sectionGenerator: "sectionGeneratorNode",
     planAggregator: "planAggregatorNode",
   };
 
-  const targetNode = nodeMap[state.failedNode || ""] || "classificationNode";
-  console.log(
-    `[Routing] retry → ${targetNode} (attempt ${state.retryCount}/${state.maxRetries})`
-  );
+  const targetNode = nodeMap[state.failedNode || ""] || "sectionPlanningNode";
+
+  logger.logExecution(`Routing: retry → ${targetNode}`, {
+    attempt: state.retryCount,
+    maxRetries: state.maxRetries,
+    failedNode: state.failedNode,
+    step: state.stepCount,
+  });
 
   return targetNode;
 };
 
-/**
- * Helper: Check if tools should be enabled for a node
- */
-export const shouldEnableTools = (nodeName: string): boolean => {
-  const toolEnabledNodes = ["generalResponseNode", "sectionGeneratorNode"];
-
-  return toolEnabledNodes.includes(nodeName);
-};
-
-/**
- * Helper: Check if state is terminal
- */
 export const isTerminalState = (state: PipelineState): boolean => {
   return !!(
-    state.finalResponse ||
     state.finalPlan ||
     state.needsClarification ||
     (state.lastError && state.retryCount > state.maxRetries) ||
@@ -247,50 +174,6 @@ export const isTerminalState = (state: PipelineState): boolean => {
   );
 };
 
-/**
- * Helper: Determine optimal next node dynamically
- * Used for recovery and optimization
- */
-export const determineOptimalNext = (state: PipelineState): string => {
-  // Priority 1: Clarification needed
-  if (state.needsClarification) {
-    return "clarificationNode";
-  }
-
-  // Priority 2: If no prompt type, classify
-  if (!state.promptType) {
-    return "classificationNode";
-  }
-
-  // Priority 3: Route based on type and completion
-  switch (state.promptType) {
-    case "general":
-      return state.finalResponse ? END : "generalResponseNode";
-
-    case "chatbot":
-      return state.finalResponse ? END : "chatbotResponseNode";
-
-    case "builder":
-      if (state.finalPlan) return END;
-      if (
-        state.planSections.length > 0 &&
-        state.generatedSections.size >= (state.sections?.length || 0)
-      ) {
-        return "planAggregatorNode";
-      }
-      if (state.sections && state.sections.length > 0) {
-        return "sectionGeneratorNode";
-      }
-      return "sectionPlanningNode";
-
-    default:
-      return "classificationNode";
-  }
-};
-
-/**
- * Helper: Analyze error type for smart retry decisions
- */
 export const analyzeError = (
   error: string
 ): {
@@ -300,7 +183,6 @@ export const analyzeError = (
 } => {
   const lowerError = error.toLowerCase();
 
-  // Transient errors - retry
   if (
     lowerError.includes("timeout") ||
     lowerError.includes("network") ||
@@ -315,30 +197,26 @@ export const analyzeError = (
     };
   }
 
-  // Parsing errors - might be recoverable
   if (lowerError.includes("json") || lowerError.includes("parse")) {
     return {
       isRecoverable: true,
       suggestedAction: "retry",
-      reason: "JSON parsing error - response format issue",
+      reason: "JSON parsing error",
     };
   }
 
-  // Authentication/permission errors - not recoverable
   if (
     lowerError.includes("auth") ||
     lowerError.includes("401") ||
-    lowerError.includes("403") ||
-    lowerError.includes("forbidden")
+    lowerError.includes("403")
   ) {
     return {
       isRecoverable: false,
       suggestedAction: "fail",
-      reason: "Authentication/authorization error",
+      reason: "Authentication error",
     };
   }
 
-  // Content/validation errors - skip node
   if (
     lowerError.includes("max") ||
     lowerError.includes("exceeded") ||
@@ -347,11 +225,10 @@ export const analyzeError = (
     return {
       isRecoverable: false,
       suggestedAction: "skip",
-      reason: "Validation or limit error",
+      reason: "Validation error",
     };
   }
 
-  // Default: assume transient, retry once
   return {
     isRecoverable: true,
     suggestedAction: "retry",

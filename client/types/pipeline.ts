@@ -75,3 +75,10 @@ export interface ToolResult {
   result: string;
   timestamp: number;
 }
+
+
+export interface HistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp?: string;
+}

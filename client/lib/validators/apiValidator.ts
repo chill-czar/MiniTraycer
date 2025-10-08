@@ -67,6 +67,18 @@ export type ValidatedGeneratePlanRequest = z.infer<
   typeof generatePlanRequestSchema
 >;
 
+// Type for API response structure
+interface ApiResponse {
+  success: boolean;
+  needsClarification: boolean;
+  message?: string;
+  data?: {
+    markdown?: string;
+    summary?: string;
+    metadata?: Record<string, unknown>;
+  } | null;
+}
+
 /**
  * Validates the incoming API request
  * @param data - Raw request body
@@ -157,31 +169,46 @@ export function sanitizeGeneratePlanRequest(
  * @param response - Raw API response
  * @returns Sanitized response
  */
-export function sanitizeOutput(response: any): any {
+export function sanitizeOutput(response: unknown): ApiResponse {
   if (!response || typeof response !== "object") {
-    return response;
+    return {
+      success: false,
+      needsClarification: false,
+      data: null,
+    };
   }
 
-  const sanitized: any = {
-    success: Boolean(response.success),
-    needsClarification: Boolean(response.needsClarification),
+  const rawResponse = response as Record<string, unknown>;
+  const sanitized: ApiResponse = {
+    success: Boolean(rawResponse.success),
+    needsClarification: Boolean(rawResponse.needsClarification),
   };
 
   // Sanitize message if present
-  if (response.message && typeof response.message === "string") {
-    sanitized.message = sanitizeText(response.message);
+  if (rawResponse.message && typeof rawResponse.message === "string") {
+    sanitized.message = sanitizeText(rawResponse.message);
   }
 
   // Sanitize data object if present
-  if (response.data && typeof response.data === "object") {
+  if (
+    rawResponse.data &&
+    typeof rawResponse.data === "object" &&
+    rawResponse.data !== null
+  ) {
+    const rawData = rawResponse.data as Record<string, unknown>;
     sanitized.data = {
-      markdown: response.data.markdown
-        ? sanitizeText(response.data.markdown)
-        : undefined,
-      summary: response.data.summary
-        ? sanitizeText(response.data.summary)
-        : undefined,
-      metadata: response.data.metadata || undefined,
+      markdown:
+        rawData.markdown && typeof rawData.markdown === "string"
+          ? sanitizeText(rawData.markdown)
+          : undefined,
+      summary:
+        rawData.summary && typeof rawData.summary === "string"
+          ? sanitizeText(rawData.summary)
+          : undefined,
+      metadata:
+        rawData.metadata && typeof rawData.metadata === "object"
+          ? (rawData.metadata as Record<string, unknown>)
+          : undefined,
     };
   } else {
     sanitized.data = null;
