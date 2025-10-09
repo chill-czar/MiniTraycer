@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,19 +8,32 @@ import { useSelector } from "react-redux";
 import { RootState } from "@/config/store";
 import UserMessage from "@/components/UserMessage";
 import AIMessage from "@/components/AIMessage";
-import { Brain, Rocket, Zap } from "lucide-react";
+import { Brain, Zap } from "lucide-react";
+import { FaGithub } from "react-icons/fa";
 
 export default function ChatHistory() {
   const messages = useSelector((state: RootState) => state.chats.messages);
   const scrollRef = useRef<HTMLDivElement>(null);
-
+  const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
 
-  // When no messages, render without ScrollArea
+  const demoPrompt = `Plan a complete SaaS platform for real-time team collaboration with chat, file sharing, and video calls. Include system architecture, tech stack, database structure, and deployment strategy.`;
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(demoPrompt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("Failed to copy:", err);
+    }
+  };
+
+  // No messages state
   if (messages.length === 0) {
     return (
       <div className="flex-1 overflow-hidden">
@@ -34,32 +47,55 @@ export default function ChatHistory() {
                 </CardTitle>
               </div>
             </CardHeader>
+
             <CardContent className="space-y-3 sm:space-y-4 text-xs sm:text-sm text-muted-foreground p-4 sm:p-6">
               <p className="leading-relaxed">
-                This is a simplified version of <strong>Traycer AI</strong> — an
-                intelligent planning assistant that sits{" "}
-                <em>above coding agents</em> and helps them think in structured
-                steps.
+                The <strong>Planning Layer</strong> is the core of Mini Traycer
+                AI. It works as a **strategic reasoning system** that analyzes
+                your idea, breaks it down into clear sections like architecture,
+                tech stack, deployment, and then generates structured
+                implementation plans.
               </p>
-              <p className="leading-relaxed">
-                Start by describing a project idea or coding task. Traycer will:
-              </p>
+
               <ul className="list-disc list-inside text-left space-y-1 sm:space-y-2 pl-2">
-                <li>🧩 Analyze if your request is vague or detailed</li>
-                <li>
-                  🧱 Break it into structured sections (Overview, Architecture,
-                  etc.)
-                </li>
-                <li>⚙️ Suggest tech stacks, data flow, and architecture</li>
+                <li>🧠 Understands vague or detailed requests</li>
+                <li>🧩 Plans structured sections dynamically</li>
+                <li>⚡ Generates implementation-ready project plans</li>
               </ul>
+
+              {/* Demo prompt box */}
+              <div className="bg-muted rounded-md p-3 text-left border mt-3">
+                <p className="text-[11px] sm:text-xs font-medium text-muted-foreground mb-2">
+                  💬 Try this demo prompt:
+                </p>
+                <p className="text-xs sm:text-sm break-words">{demoPrompt}</p>
+                <div className="flex justify-end mt-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs"
+                    onClick={copyToClipboard}
+                  >
+                    <span>{copied ? "Copied!" : "Copy Prompt"}</span>
+                  </Button>
+                </div>
+              </div>
+
+              {/* GitHub Button */}
               <div className="pt-3 sm:pt-4 flex justify-center">
-                <Button
-                  variant="default"
-                  className="flex items-center space-x-2 text-xs sm:text-sm h-8 sm:h-10 px-3 sm:px-4"
+                <a
+                  href="https://github.com/chill-czar/MiniTraycer"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
-                  <Rocket className="w-3 h-3 sm:w-4 sm:h-4" />
-                  <span>Start Planning</span>
-                </Button>
+                  <Button
+                    variant="default"
+                    className="flex items-center space-x-2 text-xs sm:text-sm h-8 sm:h-10 px-3 sm:px-4"
+                  >
+                    <FaGithub className="w-4 h-4 sm:w-5 sm:h-5" />
+                    <span>View on GitHub</span>
+                  </Button>
+                </a>
               </div>
             </CardContent>
           </Card>
@@ -74,7 +110,7 @@ export default function ChatHistory() {
     );
   }
 
-  // When messages exist, use ScrollArea
+  // Messages state
   return (
     <ScrollArea className="flex-1" ref={scrollRef}>
       <div className="flex flex-col w-[95%] sm:w-[95%] md:w-[85%] lg:w-[95%] xl:w-[95%] space-y-3 sm:space-y-4 mx-auto py-4 sm:py-6">
